@@ -7,6 +7,10 @@ ortadan kaldırmak için yazıldı.
 Sunucu yok — sadece ihtiyaç olduğunda terminalden çalıştırılan bir script. Ücretsiz,
 bilgisayarı arka planda yormaz.
 
+**Mobilden / PC'siz erişim gerekiyorsa**: [`worker/`](worker/) klasöründe aynı mantığın
+Cloudflare Workers üzerinde çalışan bir MCP sunucusu portu var — Claude'a uzaktan
+connector olarak bağlanabiliyor. Detay için [worker/README.md](worker/README.md).
+
 ## Kurulum
 
 ```bash

@@ -1,0 +1,254 @@
+/**
+ * Kampanya / ad set / reklam olusturma ve mevcut kampanya yonetimi.
+ * meta_ads/campaigns.py'nin portu.
+ *
+ * GUVENLIK KURALI: `createPausedCampaign` her zaman PAUSED durumda kampanya/
+ * adset/reklam olusturur. ACTIVE'e gecis bu dosyada YOK - MCP tool katmani
+ * (src/mcp-agent.ts) resume icin ayri bir preview+confirm_token akisi
+ * kullaniyor, tek cagriyla asla harcama baslamaz.
+ *
+ * Asagidaki sabitler bu oturumda (2026-09-01/02) gercek Meta API'ye karsi
+ * canli test edilerek bulundu - Meta bunlari artik zorunlu kiliyor:
+ *   - is_adset_budget_sharing_enabled: false  (CBO kullanilmiyorsa sart)
+ *   - bid_strategy: LOWEST_COST_WITHOUT_CAP    (teklif stratejisi artik acik olmali)
+ *   - targeting.user_os: ["iOS"]               (object_store_url iOS'a isaret ediyorsa sart)
+ * Ayrica: minimum ad-set gunluk butcesi hesaba gore degisir (bu oturumda
+ * act_244832992826003 icin ~48.23 TRY idi) - dusuk deger acik bir hata doner.
+ */
+import { adAccountPath, graphRequest, type MetaEnv } from "./client";
+import { ensureAudienceReady } from "./audiences";
+import {
+  buildCarouselCreative,
+  buildSingleImageCreative,
+  uploadImage,
+  type ImageInput,
+} from "./creatives";
+
+export const DEFAULT_OBJECTIVE = "OUTCOME_APP_PROMOTION";
+export const DEFAULT_OPTIMIZATION_GOAL = "APP_INSTALLS";
+export const DEFAULT_BILLING_EVENT = "IMPRESSIONS";
+export const DEFAULT_COUNTRIES = ["TR"];
+
+function tryToCents(tryAmount: number): number {
+  return Math.round(tryAmount * 100);
+}
+
+export function buildCampaignPayload(opts: { name: string; objective?: string }) {
+  return {
+    name: opts.name,
+    objective: opts.objective ?? DEFAULT_OBJECTIVE,
+    status: "PAUSED",
+    special_ad_categories: [] as string[],
+    is_adset_budget_sharing_enabled: false,
+  };
+}
+
+export function buildAdSetPayload(opts: {
+  name: string;
+  campaignId: string;
+  dailyBudgetTry: number;
+  audienceId: string;
+  appId: string;
+  appStoreUrl: string;
+  optimizationGoal?: string;
+  billingEvent?: string;
+  countries?: string[];
+  customEventType?: string;
+}) {
+  const promotedObject: Record<string, unknown> = {
+    application_id: opts.appId,
+    object_store_url: opts.appStoreUrl,
+  };
+  if (opts.customEventType) promotedObject.custom_event_type = opts.customEventType;
+
+  return {
+    name: opts.name,
+    campaign_id: opts.campaignId,
+    daily_budget: tryToCents(opts.dailyBudgetTry),
+    billing_event: opts.billingEvent ?? DEFAULT_BILLING_EVENT,
+    optimization_goal: opts.optimizationGoal ?? DEFAULT_OPTIMIZATION_GOAL,
+    bid_strategy: "LOWEST_COST_WITHOUT_CAP",
+    status: "PAUSED",
+    promoted_object: promotedObject,
+    targeting: {
+      custom_audiences: [{ id: opts.audienceId }],
+      geo_locations: { countries: opts.countries ?? DEFAULT_COUNTRIES },
+      user_os: ["iOS"],
+    },
+  };
+}
+
+export function buildAdPayload(opts: { name: string; adsetId: string; creativeId: string }) {
+  return {
+    name: opts.name,
+    adset_id: opts.adsetId,
+    creative: { creative_id: opts.creativeId },
+    status: "PAUSED",
+  };
+}
+
+export interface CreateCampaignInput {
+  name: string;
+  dailyBudgetTry: number;
+  audienceId: string;
+  appId: string;
+  appStoreUrl: string;
+  pageId: string;
+  link: string;
+  creativeType: "single" | "carousel";
+  images: ImageInput[];
+  headlines: string[];
+  descriptions?: string[];
+  message?: string;
+  objective?: string;
+  optimizationGoal?: string;
+  billingEvent?: string;
+  countries?: string[];
+  customEventType?: string;
+  dryRun?: boolean;
+}
+
+export async function createPausedCampaign(env: MetaEnv, input: CreateCampaignInput) {
+  if (input.creativeType !== "single" && input.creativeType !== "carousel") {
+    throw new Error("creative_type 'single' ya da 'carousel' olmali.");
+  }
+  if (input.creativeType === "carousel" && input.headlines.length !== input.images.length) {
+    throw new Error("Carousel'de her gorsel icin bir headline gerekli (sayilar esit degil).");
+  }
+  if (input.creativeType === "single" && input.images.length !== 1) {
+    throw new Error("Tekil (single) kreatif icin tam olarak 1 gorsel gerekli.");
+  }
+
+  // Kitle hazir degilse burada durur - hicbir yazma cagrisi yapilmadan once.
+  await ensureAudienceReady(env, input.audienceId);
+
+  const campaignPayload = buildCampaignPayload({ name: input.name, objective: input.objective });
+  const adsetPreview = buildAdSetPayload({
+    name: `${input.name} - adset`,
+    campaignId: "<olusturulacak>",
+    dailyBudgetTry: input.dailyBudgetTry,
+    audienceId: input.audienceId,
+    appId: input.appId,
+    appStoreUrl: input.appStoreUrl,
+    optimizationGoal: input.optimizationGoal,
+    billingEvent: input.billingEvent,
+    countries: input.countries,
+    customEventType: input.customEventType,
+  });
+
+  const plan = {
+    campaign: campaignPayload,
+    adset: adsetPreview,
+    creative_type: input.creativeType,
+    images: input.images,
+    headlines: input.headlines,
+    descriptions: input.descriptions ?? null,
+    link: input.link,
+    page_id: input.pageId,
+  };
+
+  if (input.dryRun) {
+    return { dry_run: true, plan };
+  }
+
+  const campaign = await graphRequest(env, adAccountPath(env, "campaigns"), {
+    method: "POST",
+    params: campaignPayload,
+  });
+  const campaignId = campaign.id as string;
+
+  const adsetPayload = buildAdSetPayload({
+    name: `${input.name} - adset`,
+    campaignId,
+    dailyBudgetTry: input.dailyBudgetTry,
+    audienceId: input.audienceId,
+    appId: input.appId,
+    appStoreUrl: input.appStoreUrl,
+    optimizationGoal: input.optimizationGoal,
+    billingEvent: input.billingEvent,
+    countries: input.countries,
+    customEventType: input.customEventType,
+  });
+  const adset = await graphRequest(env, adAccountPath(env, "adsets"), {
+    method: "POST",
+    params: adsetPayload,
+  });
+  const adsetId = adset.id as string;
+
+  // Sirali yukleniyor (Python'daki list comprehension gibi) - Meta rate limit'ine
+  // ani yuklenmeyi onlemek icin paralel degil.
+  const imageHashes: string[] = [];
+  for (const image of input.images) {
+    imageHashes.push(await uploadImage(env, image));
+  }
+
+  let creativePayload: Record<string, unknown>;
+  if (input.creativeType === "single") {
+    creativePayload = buildSingleImageCreative({
+      pageId: input.pageId,
+      link: input.link,
+      imageHash: imageHashes[0],
+      message: input.message ?? "",
+      headline: input.headlines[0],
+    });
+  } else {
+    const descs = input.descriptions ?? input.images.map(() => "");
+    const cards = imageHashes.map((hash, i) => ({
+      image_hash: hash,
+      name: input.headlines[i],
+      description: descs[i] ?? "",
+    }));
+    creativePayload = buildCarouselCreative({
+      pageId: input.pageId,
+      link: input.link,
+      message: input.message ?? "",
+      cards,
+    });
+  }
+
+  const creative = await graphRequest(env, adAccountPath(env, "adcreatives"), {
+    method: "POST",
+    params: creativePayload,
+  });
+  const creativeId = creative.id as string;
+
+  const adPayload = buildAdPayload({ name: `${input.name} - ad`, adsetId, creativeId });
+  const ad = await graphRequest(env, adAccountPath(env, "ads"), {
+    method: "POST",
+    params: adPayload,
+  });
+
+  return {
+    dry_run: false,
+    campaign_id: campaignId,
+    adset_id: adsetId,
+    creative_id: creativeId,
+    ad_id: ad.id as string,
+    status: "PAUSED" as const,
+  };
+}
+
+export async function pauseCampaign(env: MetaEnv, campaignId: string): Promise<void> {
+  await graphRequest(env, `/${campaignId}`, { method: "POST", params: { status: "PAUSED" } });
+}
+
+/** DIKKAT: Bu kampanyayi ACTIVE yapar, harcama baslar. Tool katmani onay ister. */
+export async function resumeCampaign(env: MetaEnv, campaignId: string): Promise<void> {
+  await graphRequest(env, `/${campaignId}`, { method: "POST", params: { status: "ACTIVE" } });
+}
+
+export async function setCampaignBudget(
+  env: MetaEnv,
+  campaignId: string,
+  dailyBudgetTry: number,
+): Promise<void> {
+  await graphRequest(env, `/${campaignId}`, {
+    method: "POST",
+    params: { daily_budget: tryToCents(dailyBudgetTry) },
+  });
+}
+
+export async function getCampaignStatus(env: MetaEnv, campaignId: string): Promise<Record<string, unknown>> {
+  const fields = ["name", "status", "daily_budget", "objective"].join(",");
+  return await graphRequest(env, `/${campaignId}`, { params: { fields } });
+}

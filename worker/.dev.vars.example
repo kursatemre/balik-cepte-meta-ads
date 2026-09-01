@@ -1,0 +1,13 @@
+# Yerel `wrangler dev` testi icin: bu dosyayi `.dev.vars` olarak kopyala ve doldur.
+# Production'da bunlar `.dev.vars`'a degil, `wrangler secret put <AD>` ile eklenir.
+# Degerler root'taki ../.env ile ayni.
+
+MCP_ADMIN_PASSWORD=
+
+META_APP_ID=
+META_APP_SECRET=
+META_ACCESS_TOKEN=
+META_AD_ACCOUNT_ID=act_244832992826003
+META_PAGE_ID=190068084900577
+META_PROMOTED_APP_ID=
+META_APP_STORE_URL=https://apps.apple.com/tr/app/id6765955082

@@ -1,0 +1,28 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "balik-cepte-meta-ads-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  // nodejs_compat: agents/MCP SDK bazi Node API'lerini bekliyor.
+  // global_fetch_strictly_public: CIMD (Client ID Metadata Document) icin sart
+  // - disariya giden fetch'lerin ozel/dahili adreslere gitmesini engeller (SSRF korumasi).
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["BalikCepteMcp"]
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "MCP_OBJECT", "class_name": "BalikCepteMcp" }
+    ]
+  },
+  "kv_namespaces": [
+    // `npx wrangler kv namespace create OAUTH_KV` ile olustur, doner id'yi buraya yaz.
+    { "binding": "OAUTH_KV", "id": "53de8824c26542ccb96466f6a48b695c" }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

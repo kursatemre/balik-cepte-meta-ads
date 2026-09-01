@@ -9,3 +9,9 @@ venv/
 creatives/*
 !creatives/.gitkeep
 !creatives/README.md
+
+# worker/ (Cloudflare Workers MCP sunucusu)
+worker/node_modules/
+worker/.wrangler/
+worker/.dev.vars
+worker/dist/
