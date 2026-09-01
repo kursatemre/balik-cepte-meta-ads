@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.csv
+*.egg-info/
+.pytest_cache/
+creatives/*
+!creatives/.gitkeep
+!creatives/README.md
