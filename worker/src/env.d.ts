@@ -6,6 +6,8 @@ declare global {
     MCP_OBJECT: DurableObjectNamespace;
     // workers-oauth-provider'in kullandigi KV
     OAUTH_KV: KVNamespace;
+    // Kalici gorsel deposu - bkz. src/store.ts
+    CREATIVES: R2Bucket;
 
     // Tek kullanicili giris parolasi (OAuth /authorize ekraninda kontrol edilir)
     MCP_ADMIN_PASSWORD: string;

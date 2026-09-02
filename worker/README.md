@@ -86,6 +86,13 @@ Yerel test için `.dev.vars.example`'ı `.dev.vars` olarak kopyala, doldur,
 `report` — her biri `cli.py`'deki komutlarla birebir eşleşiyor, detaylar için
 tool açıklamalarına (Claude içinde görünür) ya da `src/mcp-agent.ts`'e bak.
 
+**Görsel deposu (R2)**: `creative_store_list`, `creative_store_upload`
+(base64), `creative_store_upload_from_url`, `creative_store_delete`. Bir
+görseli bir kere depoya kaydet, sonra `campaign_create`'de `images` alanında
+`{"key": "kart1.jpg"}` ile tekrar tekrar referans ver — her seferinde yeniden
+yüklemeye gerek kalmaz. Python CLI'daki yerel `creatives/` klasörünün uzaktan
+erişilebilir karşılığı.
+
 ## Test edildi mi?
 
 Evet — bu oturumda gerçek deploy'a karşı: OAuth (DCR + PKCE + password login +

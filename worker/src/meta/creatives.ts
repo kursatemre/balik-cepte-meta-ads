@@ -10,15 +10,21 @@
  * olarak gonderir.
  */
 import { adAccountPath, graphRequest, type MetaEnv } from "./client";
+import { readCreativeAsBase64 } from "../store";
 
 const DEFAULT_CTA_TYPE = "LEARN_MORE";
 const CAROUSEL_MIN_CARDS = 2;
 const CAROUSEL_MAX_CARDS = 10;
 
-export type ImageInput = { url: string } | { base64: string };
+/** `key`: creative_store_upload* ile depoya (R2) kaydedilmis bir gorsele referans. */
+export type ImageInput = { url: string } | { base64: string } | { key: string };
 
 function isUrlInput(image: ImageInput): image is { url: string } {
   return "url" in image;
+}
+
+function isKeyInput(image: ImageInput): image is { key: string } {
+  return "key" in image;
 }
 
 function arrayBufferToBase64(buf: ArrayBuffer): string {
@@ -31,10 +37,18 @@ function arrayBufferToBase64(buf: ArrayBuffer): string {
   return btoa(binary);
 }
 
-/** Bir gorseli (URL'den indirip ya da dogrudan base64 verilerek) Meta'ya yukler, image_hash doner. */
-export async function uploadImage(env: MetaEnv, image: ImageInput): Promise<string> {
+/** Bir gorseli (URL'den, depodan (R2) ya da dogrudan base64 verilerek) Meta'ya yukler, image_hash doner. */
+export async function uploadImage(
+  env: MetaEnv & { CREATIVES?: R2Bucket },
+  image: ImageInput,
+): Promise<string> {
   let bytes: string;
-  if (isUrlInput(image)) {
+  if (isKeyInput(image)) {
+    if (!env.CREATIVES) {
+      throw new Error("Depolama (R2) bu ortamda yapilandirilmamis - CREATIVES binding eksik.");
+    }
+    bytes = await readCreativeAsBase64(env.CREATIVES, image.key);
+  } else if (isUrlInput(image)) {
     const res = await fetch(image.url);
     if (!res.ok) {
       throw new Error(`Gorsel URL'den indirilemedi (HTTP ${res.status}): ${image.url}`);

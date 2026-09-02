@@ -16,6 +16,7 @@ import { z } from "zod";
 import * as audiences from "./meta/audiences";
 import * as campaigns from "./meta/campaigns";
 import * as reports from "./meta/reports";
+import * as store from "./store";
 import { MetaApiError } from "./meta/client";
 
 type Props = { userId: string };
@@ -42,6 +43,11 @@ function jsonResult(obj: unknown) {
 const imageInputSchema = z.union([
   z.object({ url: z.string().url().describe("Herkese acik bir goruntu URL'i - sunucu indirip Meta'ya yukler.") }),
   z.object({ base64: z.string().describe("Ham gorsel byte'larinin base64 kodu.") }),
+  z.object({
+    key: z
+      .string()
+      .describe("creative_store_upload / creative_store_upload_from_url ile depoya kaydedilmis bir gorselin anahtari."),
+  }),
 ]);
 
 export class BalikCepteMcp extends McpAgent<Env, State, Props> {
@@ -253,6 +259,81 @@ export class BalikCepteMcp extends McpAgent<Env, State, Props> {
         try {
           await campaigns.setCampaignBudget(this.env, campaign_id, daily_budget_try);
           return jsonResult({ campaign_id, daily_budget_try });
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "creative_store_list",
+      {
+        description:
+          "Kalici gorsel deposunda (R2) saklanan gorsellerin listesini gosterir - anahtar, boyut, yuklenme " +
+          "tarihi. campaign_create'de images alaninda {key: ...} ile referans vermeden once buradan bak.",
+        inputSchema: {},
+      },
+      async () => {
+        try {
+          return jsonResult(await store.listCreatives(this.env.CREATIVES));
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "creative_store_upload",
+      {
+        description:
+          "Bir gorseli (base64 verilerek) kalici depoya (R2) kaydeder - sonra campaign_create'de " +
+          "images alaninda {key: ...} ile tekrar tekrar referans verilebilir, her seferinde yeniden " +
+          "yuklemeye gerek kalmaz.",
+        inputSchema: {
+          key: z.string().describe("Dosya adi/anahtar, orn. kart1.jpg. Ayni anahtar tekrar kullanilirsa uzerine yazar."),
+          base64: z.string().describe("Ham gorsel byte'larinin base64 kodu."),
+          content_type: z.string().optional().describe("orn. image/jpeg, image/png"),
+        },
+      },
+      async ({ key, base64, content_type }) => {
+        try {
+          await store.uploadCreativeFromBase64(this.env.CREATIVES, key, base64, content_type);
+          return jsonResult({ key, stored: true });
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "creative_store_upload_from_url",
+      {
+        description: "Bir goruntu URL'ini indirip kalici depoya (R2) kaydeder - creative_store_upload'in URL versiyonu.",
+        inputSchema: {
+          key: z.string().describe("Dosya adi/anahtar, orn. kart1.jpg."),
+          url: z.string().url(),
+        },
+      },
+      async ({ key, url }) => {
+        try {
+          await store.uploadCreativeFromUrl(this.env.CREATIVES, key, url);
+          return jsonResult({ key, stored: true });
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "creative_store_delete",
+      {
+        description: "Depodan bir gorseli siler.",
+        inputSchema: { key: z.string() },
+      },
+      async ({ key }) => {
+        try {
+          await store.deleteCreative(this.env.CREATIVES, key);
+          return jsonResult({ key, deleted: true });
         } catch (err) {
           return errorResult(err);
         }

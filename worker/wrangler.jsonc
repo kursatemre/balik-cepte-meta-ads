@@ -22,6 +22,10 @@
     // `npx wrangler kv namespace create OAUTH_KV` ile olustur, doner id'yi buraya yaz.
     { "binding": "OAUTH_KV", "id": "53de8824c26542ccb96466f6a48b695c" }
   ],
+  "r2_buckets": [
+    // `npx wrangler r2 bucket create <bucket-adi>` ile olustur.
+    { "binding": "CREATIVES", "bucket_name": "balik-cepte-meta-ads-creatives" }
+  ],
   "observability": {
     "enabled": true
   }

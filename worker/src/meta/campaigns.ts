@@ -108,7 +108,10 @@ export interface CreateCampaignInput {
   dryRun?: boolean;
 }
 
-export async function createPausedCampaign(env: MetaEnv, input: CreateCampaignInput) {
+export async function createPausedCampaign(
+  env: MetaEnv & { CREATIVES?: R2Bucket },
+  input: CreateCampaignInput,
+) {
   if (input.creativeType !== "single" && input.creativeType !== "carousel") {
     throw new Error("creative_type 'single' ya da 'carousel' olmali.");
   }
