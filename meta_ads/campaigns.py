@@ -50,7 +50,7 @@ def build_adset_payload(
     name: str,
     campaign_id: str,
     daily_budget_try: float,
-    audience_id: str,
+    audience_id: Optional[str] = None,
     app_id: str,
     app_store_url: str,
     optimization_goal: str = DEFAULT_OPTIMIZATION_GOAL,
@@ -69,6 +69,20 @@ def build_adset_payload(
     if custom_event_type:
         promoted_object["custom_event_type"] = custom_event_type
 
+    targeting: dict[str, Any] = {
+        "geo_locations": {"countries": countries or DEFAULT_COUNTRIES},
+        # object_store_url her zaman Apple App Store'a isaret ediyor -
+        # targeting bunu iOS'a kisitlamazsa Meta "Mobile Targeting
+        # Mismatch" hatasi veriyor (uygulama tek platform, hedefleme
+        # coklu platform varsayiyordu).
+        "user_os": ["iOS"],
+    }
+    # audience_id verilmezse Meta'nin genis/Advantage+ hedeflemesine
+    # birakilir (orn. mevcut "claude TOF" kampanyasi da custom_audiences
+    # kullanmiyor).
+    if audience_id:
+        targeting["custom_audiences"] = [{"id": audience_id}]
+
     return {
         AdSet.Field.name: name,
         AdSet.Field.campaign_id: campaign_id,
@@ -81,15 +95,7 @@ def build_adset_payload(
         AdSet.Field.bid_strategy: AdSet.BidStrategy.lowest_cost_without_cap,
         AdSet.Field.status: AdSet.Status.paused,
         AdSet.Field.promoted_object: promoted_object,
-        AdSet.Field.targeting: {
-            "custom_audiences": [{"id": audience_id}],
-            "geo_locations": {"countries": countries or DEFAULT_COUNTRIES},
-            # object_store_url her zaman Apple App Store'a isaret ediyor -
-            # targeting bunu iOS'a kisitlamazsa Meta "Mobile Targeting
-            # Mismatch" hatasi veriyor (uygulama tek platform, hedefleme
-            # coklu platform varsayiyordu).
-            "user_os": ["iOS"],
-        },
+        AdSet.Field.targeting: targeting,
     }
 
 
@@ -106,7 +112,6 @@ def create_paused_campaign(
     *,
     name: str,
     daily_budget_try: float,
-    audience_id: str,
     app_id: str,
     app_store_url: str,
     page_id: str,
@@ -121,6 +126,7 @@ def create_paused_campaign(
     billing_event: str = DEFAULT_BILLING_EVENT,
     countries: Optional[list[str]] = None,
     custom_event_type: Optional[str] = None,
+    audience_id: Optional[str] = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     if creative_type not in ("single", "carousel"):
@@ -131,7 +137,9 @@ def create_paused_campaign(
         raise ValueError("Tekil (single) kreatif icin tam olarak 1 gorsel gerekli.")
 
     # Kitle hazir degilse burada durur - hicbir API cagrisi yapilmadan once.
-    ensure_ready(audience_id)
+    # audience_id verilmezse bu kontrol atlanir (genis/Advantage+ hedefleme).
+    if audience_id:
+        ensure_ready(audience_id)
 
     campaign_payload = build_campaign_payload(name=name, objective=objective)
     adset_payload_preview = build_adset_payload(

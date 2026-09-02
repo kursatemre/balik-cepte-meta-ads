@@ -47,7 +47,7 @@ export function buildAdSetPayload(opts: {
   name: string;
   campaignId: string;
   dailyBudgetTry: number;
-  audienceId: string;
+  audienceId?: string;
   appId: string;
   appStoreUrl: string;
   optimizationGoal?: string;
@@ -61,6 +61,16 @@ export function buildAdSetPayload(opts: {
   };
   if (opts.customEventType) promotedObject.custom_event_type = opts.customEventType;
 
+  const targeting: Record<string, unknown> = {
+    geo_locations: { countries: opts.countries ?? DEFAULT_COUNTRIES },
+    user_os: ["iOS"],
+  };
+  // audience_id verilmezse Meta'nin genis/Advantage+ hedeflemesine birakilir
+  // (orn. mevcut "claude TOF" kampanyasi da custom_audiences kullanmiyor).
+  if (opts.audienceId) {
+    targeting.custom_audiences = [{ id: opts.audienceId }];
+  }
+
   return {
     name: opts.name,
     campaign_id: opts.campaignId,
@@ -70,11 +80,7 @@ export function buildAdSetPayload(opts: {
     bid_strategy: "LOWEST_COST_WITHOUT_CAP",
     status: "PAUSED",
     promoted_object: promotedObject,
-    targeting: {
-      custom_audiences: [{ id: opts.audienceId }],
-      geo_locations: { countries: opts.countries ?? DEFAULT_COUNTRIES },
-      user_os: ["iOS"],
-    },
+    targeting,
   };
 }
 
@@ -90,7 +96,8 @@ export function buildAdPayload(opts: { name: string; adsetId: string; creativeId
 export interface CreateCampaignInput {
   name: string;
   dailyBudgetTry: number;
-  audienceId: string;
+  /** Verilmezse Meta'nin genis/Advantage+ hedeflemesine birakilir (custom audience kullanilmaz). */
+  audienceId?: string;
   appId: string;
   appStoreUrl: string;
   pageId: string;
@@ -123,7 +130,10 @@ export async function createPausedCampaign(
   }
 
   // Kitle hazir degilse burada durur - hicbir yazma cagrisi yapilmadan once.
-  await ensureAudienceReady(env, input.audienceId);
+  // audience_id verilmezse bu kontrol atlanir (genis/Advantage+ hedefleme).
+  if (input.audienceId) {
+    await ensureAudienceReady(env, input.audienceId);
+  }
 
   const campaignPayload = buildCampaignPayload({ name: input.name, objective: input.objective });
   const adsetPreview = buildAdSetPayload({

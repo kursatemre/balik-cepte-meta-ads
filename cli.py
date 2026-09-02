@@ -163,7 +163,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_create.add_argument("--billing-event", default=campaigns.DEFAULT_BILLING_EVENT)
     p_create.add_argument("--daily-budget", type=float, required=True, help="TRY cinsinden")
-    p_create.add_argument("--audience-id", required=True)
+    p_create.add_argument(
+        "--audience-id",
+        default=None,
+        help="Verilmezse Meta'nin genis/Advantage+ hedeflemesine birakilir (custom audience kullanilmaz).",
+    )
     p_create.add_argument("--countries", nargs="+", default=None, help="Varsayilan: TR")
     p_create.add_argument("--creative-type", choices=["single", "carousel"], required=True)
     p_create.add_argument("--images", nargs="+", required=True, help="Yerel dosya yollari")

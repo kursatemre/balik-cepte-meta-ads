@@ -214,7 +214,13 @@ export class BalikCepteMcp extends McpAgent<Env, State, Props> {
               "TRY cinsinden gunluk butce. Meta'nin minimumu hesaba gore degisir (bu proje icin ~48 TRY " +
                 "civariydi) - dusukse acik bir 'Butce Cok Dusuk' hatasi doner.",
             ),
-          audience_id: z.string(),
+          audience_id: z
+            .string()
+            .optional()
+            .describe(
+              "Verilmezse Meta'nin genis/Advantage+ hedeflemesine birakilir, custom audience kullanilmaz " +
+                "(orn. mevcut 'claude TOF' kampanyasi da audience_id kullanmiyor).",
+            ),
           countries: z.array(z.string()).optional().describe('Varsayilan: ["TR"]'),
           creative_type: z.enum(["single", "carousel"]),
           images: z.array(imageInputSchema).min(1).describe("carousel icin gorsel sayisi = headline sayisi olmali."),
