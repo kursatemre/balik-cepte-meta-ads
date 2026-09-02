@@ -1,18 +1,23 @@
 /**
- * Mobil-dostu gorsel yukleme sayfasi.
+ * Mobil-dostu gorsel/video yukleme sayfasi.
  *
- * Asil sorunu cozer: kullanicinin telefonundaki bir gorseli, once baska bir
- * yerde barindirmasina gerek kalmadan, dogrudan bu worker'in R2 deposuna
- * koyabilmesi. `creative_store_upload_from_url` zaten herkese acik bir URL
- * gerektiriyordu (barindirma sorununu cozmuyor); Claude'un (model olarak)
- * sohbette gorduğu bir gorselin ham byte'larini harfiyen base64 olarak
- * yeniden uretmesi de mumkun degil (vision girdisi token'lardan orijinal
- * byte'lara geri cevrilemez). Bu yuzden gercek cozum: tarayicidan dogrudan
+ * Asil sorunu cozer: kullanicinin telefonundaki bir gorseli/videoyu, once
+ * baska bir yerde barindirmasina gerek kalmadan, dogrudan bu worker'in R2
+ * deposuna koyabilmesi. `creative_store_upload_from_url` zaten herkese acik
+ * bir URL gerektiriyordu (barindirma sorununu cozmuyor); Claude'un (model
+ * olarak) - Cowork dahil - sohbette gorduğu bir medyanin ham byte'larini
+ * harfiyen base64 olarak yeniden uretmesi de mumkun degil (vision/video
+ * girdisi token'lardan orijinal byte'lara geri cevrilemez, bu bir hata degil
+ * modelin calisma sekli). Bu yuzden gercek cozum: tarayicidan dogrudan
  * dosya secip yukleyen bir form.
  *
  * Basic Auth ile korunuyor (MCP_ADMIN_PASSWORD - MCP login'deki ayni parola,
  * tek kaynak). Mobil tarayicilar Basic Auth'u native destekler, ayri bir
  * cookie/session mekanizmasi kurmaya gerek yok.
+ *
+ * NOT: Cloudflare Workers'da istek govdesi boyut siniri var (plana gore
+ * degisir, genelde 100MB civari) - kisa mobil reklam videolari icin yeterli
+ * olmali, cok uzun/yuksek cozunurluklu videolarda sinira takilabilir.
  */
 import { Hono } from "hono";
 import { basicAuth } from "hono/basic-auth";
@@ -34,7 +39,7 @@ function page(opts: { notice?: string; noticeIsError?: boolean } = {}): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Balık Cepte - Görsel Yükle</title>
+<title>Balık Cepte - Görsel/Video Yükle</title>
 <style>
   :root { color-scheme: dark; }
   body { font-family: system-ui, -apple-system, sans-serif; background: #0f1115; color: #e8e8e8;
@@ -58,12 +63,12 @@ function page(opts: { notice?: string; noticeIsError?: boolean } = {}): string {
 </head>
 <body>
 <main>
-  <h1>🐟 Görsel Yükle</h1>
-  <p class="sub">Yüklenen görsel Claude'da <span class="key">creative_store_list</span> ile görünür, kampanyalarda <span class="key">{"key": "..."}</span> ile kullanılır.</p>
+  <h1>🐟 Görsel/Video Yükle</h1>
+  <p class="sub">Yüklenen dosya Claude'da <span class="key">creative_store_list</span> ile görünür, kampanyalarda <span class="key">{"key": "..."}</span> ile kullanılır.</p>
   ${notice ? `<div class="notice ${noticeIsError ? "err" : "ok"}">${notice}</div>` : ""}
   <form method="POST" enctype="multipart/form-data">
-    <label for="file">Görsel</label>
-    <input type="file" id="file" name="file" accept="image/*" required>
+    <label for="file">Görsel ya da video</label>
+    <input type="file" id="file" name="file" accept="image/*,video/*" required>
     <label for="key">Anahtar (boş bırakırsan dosya adı kullanılır)</label>
     <input type="text" id="key" name="key" placeholder="kart1.jpg">
     <button type="submit">Yükle</button>
