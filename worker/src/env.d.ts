@@ -20,5 +20,13 @@ declare global {
     META_PAGE_ID: string;
     META_PROMOTED_APP_ID: string;
     META_APP_STORE_URL: string;
+
+    // Apple Search Ads - bkz. src/asa/client.ts
+    ASA_CLIENT_ID: string;
+    ASA_TEAM_ID: string;
+    ASA_KEY_ID: string;
+    ASA_ORG_ID: string;
+    ASA_ADAM_ID: string; // App Store numeric id (Balik Cepte)
+    ASA_PRIVATE_KEY: string; // PKCS8 PEM
   }
 }

@@ -23,9 +23,23 @@ import * as reports from "./meta/reports";
 import * as store from "./store";
 import { MetaApiError } from "./meta/client";
 
+import * as asaAccount from "./asa/account";
+import * as asaAdgroups from "./asa/adgroups";
+import * as asaCampaigns from "./asa/campaigns";
+import * as asaKeywords from "./asa/keywords";
+import * as asaReports from "./asa/reports";
+import { AsaApiError } from "./asa/client";
+
 type Props = { userId: string };
 
-type PendingKind = "campaign_resume" | "adset_resume" | "ad_resume" | "campaign_delete";
+type PendingKind =
+  | "campaign_resume"
+  | "adset_resume"
+  | "ad_resume"
+  | "campaign_delete"
+  | "asa_campaign_resume"
+  | "asa_adgroup_resume"
+  | "asa_campaign_delete";
 
 interface PendingAction {
   kind: PendingKind;
@@ -39,7 +53,12 @@ type State = { pending: PendingAction | null };
 const CONFIRM_TOKEN_TTL_MS = 5 * 60 * 1000;
 
 function errorResult(err: unknown) {
-  const text = err instanceof MetaApiError ? err.format() : err instanceof Error ? err.message : String(err);
+  const text =
+    err instanceof MetaApiError || err instanceof AsaApiError
+      ? err.format()
+      : err instanceof Error
+        ? err.message
+        : String(err);
   return { content: [{ type: "text" as const, text }], isError: true as const };
 }
 
@@ -692,6 +711,448 @@ export class BalikCepteMcp extends McpAgent<Env, State, Props> {
             level: args.level,
           });
           return jsonResult(rows);
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    // =====================================================================
+    // Apple Search Ads (ASA)
+    // =====================================================================
+
+    this.server.registerTool(
+      "asa_org_info",
+      {
+        description: "Apple Search Ads hesap/org bilgisini gosterir (orgId, currency, roller) - debug/dogrulama icin.",
+        inputSchema: {},
+      },
+      async () => {
+        try {
+          return jsonResult(await asaAccount.getAcls(this.env));
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    // ---- ASA Kampanya ---------------------------------------------------
+
+    this.server.registerTool(
+      "asa_campaign_list",
+      { description: "Apple Search Ads kampanyalarini listeler.", inputSchema: {} },
+      async () => {
+        try {
+          return jsonResult(await asaCampaigns.listCampaigns(this.env));
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "asa_campaign_status",
+      { description: "Bir ASA kampanyasinin durumunu gosterir.", inputSchema: { campaign_id: z.string() } },
+      async ({ campaign_id }) => {
+        try {
+          return jsonResult(await asaCampaigns.getCampaignStatus(this.env, campaign_id));
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "asa_campaign_create",
+      {
+        description:
+          "Yeni bir Apple Search Ads kampanyasi olusturur. GUVENLIK: HER ZAMAN PAUSED olusturulur - " +
+          "bunu degistiren bir parametre yoktur. Aktif etmek icin asa_campaign_resume_preview + " +
+          "asa_campaign_resume_confirm gerekir.",
+        inputSchema: {
+          name: z.string(),
+          daily_budget: z.number().positive().describe("Gunluk butce (org para birimi, varsayilan USD)."),
+          currency: z.string().optional().describe("Varsayilan: USD (org currency'si)."),
+          adam_id: z.string().optional().describe("Verilmezse ASA_ADAM_ID secret (Balik Cepte) kullanilir."),
+          countries_or_regions: z.array(z.string()).optional().describe('Varsayilan: ["TR"]'),
+        },
+      },
+      async (args) => {
+        try {
+          const adamId = args.adam_id ?? this.env.ASA_ADAM_ID;
+          const result = await asaCampaigns.createPausedCampaign(this.env, {
+            name: args.name,
+            dailyBudgetAmount: args.daily_budget,
+            currency: args.currency,
+            adamId,
+            countriesOrRegions: args.countries_or_regions,
+          });
+          return jsonResult(result);
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "asa_campaign_pause",
+      { description: "ASA kampanyasini PAUSED yapar. Onay gerektirmez.", inputSchema: { campaign_id: z.string() } },
+      async ({ campaign_id }) => {
+        try {
+          await asaCampaigns.pauseCampaign(this.env, campaign_id);
+          return jsonResult({ campaign_id, status: "PAUSED" });
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "asa_campaign_resume_preview",
+      {
+        description: "ASA kampanyasini ENABLED yapmadan once durumunu gosterir ve 5 dk gecerli confirm_token uretir.",
+        inputSchema: { campaign_id: z.string() },
+      },
+      async ({ campaign_id }) => {
+        try {
+          const status = await asaCampaigns.getCampaignStatus(this.env, campaign_id);
+          const { token, expiresInSeconds } = this.armPending("asa_campaign_resume", campaign_id);
+          return jsonResult({
+            campaign: status,
+            warning: "Bu kampanyayi ENABLED yapmak GERCEK HARCAMAYI baslatir. Onaylamadan confirm'i cagirma.",
+            confirm_token: token,
+            expires_in_seconds: expiresInSeconds,
+          });
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "asa_campaign_resume_confirm",
+      {
+        description: "asa_campaign_resume_preview'den alinan confirm_token ile kampanyayi GERCEKTEN ENABLED yapar.",
+        inputSchema: { campaign_id: z.string(), confirm_token: z.string() },
+      },
+      async ({ campaign_id, confirm_token }) => {
+        const err = this.consumePending("asa_campaign_resume", campaign_id, confirm_token);
+        if (err) return errorResult(new Error(err));
+        try {
+          await asaCampaigns.resumeCampaign(this.env, campaign_id);
+          return jsonResult({ campaign_id, status: "ENABLED" });
+        } catch (e) {
+          return errorResult(e);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "asa_campaign_set_budget",
+      {
+        description: "ASA kampanyasinin gunluk butcesini gunceller.",
+        inputSchema: { campaign_id: z.string(), daily_budget: z.number().positive(), currency: z.string().optional() },
+      },
+      async ({ campaign_id, daily_budget, currency }) => {
+        try {
+          await asaCampaigns.setCampaignBudget(this.env, campaign_id, daily_budget, currency);
+          return jsonResult({ campaign_id, daily_budget });
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "asa_campaign_delete_preview",
+      {
+        description:
+          "ASA kampanyasini silmeden once durumunu gosterir ve confirm_token uretir. PAUSED degilse reddedilir. " +
+          "Silme KALICIDIR.",
+        inputSchema: { campaign_id: z.string() },
+      },
+      async ({ campaign_id }) => {
+        try {
+          const status = await asaCampaigns.getCampaignStatus(this.env, campaign_id);
+          if (status.status !== "PAUSED") {
+            throw new Error(`Kampanya '${status.name}' su an ${status.status} - once asa_campaign_pause ile durdur.`);
+          }
+          const { token, expiresInSeconds } = this.armPending("asa_campaign_delete", campaign_id);
+          return jsonResult({
+            campaign: status,
+            warning: "Bu kampanyayi silmek KALICIDIR ve geri alinamaz.",
+            confirm_token: token,
+            expires_in_seconds: expiresInSeconds,
+          });
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "asa_campaign_delete_confirm",
+      {
+        description: "asa_campaign_delete_preview'den alinan confirm_token ile kampanyayi KALICI olarak siler.",
+        inputSchema: { campaign_id: z.string(), confirm_token: z.string() },
+      },
+      async ({ campaign_id, confirm_token }) => {
+        const err = this.consumePending("asa_campaign_delete", campaign_id, confirm_token);
+        if (err) return errorResult(new Error(err));
+        try {
+          await asaCampaigns.deleteCampaign(this.env, campaign_id);
+          return jsonResult({ campaign_id, deleted: true });
+        } catch (e) {
+          return errorResult(e);
+        }
+      },
+    );
+
+    // ---- ASA Ad Group -----------------------------------------------------
+
+    this.server.registerTool(
+      "asa_adgroup_list",
+      { description: "Bir ASA kampanyasinin ad group'larini listeler.", inputSchema: { campaign_id: z.string() } },
+      async ({ campaign_id }) => {
+        try {
+          return jsonResult(await asaAdgroups.listAdGroups(this.env, campaign_id));
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "asa_adgroup_status",
+      {
+        description: "Bir ASA ad group'un durumunu gosterir.",
+        inputSchema: { campaign_id: z.string(), adgroup_id: z.string() },
+      },
+      async ({ campaign_id, adgroup_id }) => {
+        try {
+          return jsonResult(await asaAdgroups.getAdGroupStatus(this.env, campaign_id, adgroup_id));
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "asa_adgroup_create",
+      {
+        description:
+          "Bir ASA kampanyasi altinda yeni ad group olusturur. GUVENLIK: HER ZAMAN PAUSED olusturulur.",
+        inputSchema: {
+          campaign_id: z.string(),
+          name: z.string(),
+          default_bid: z.number().positive().describe("Varsayilan keyword teklifi."),
+          currency: z.string().optional(),
+          cpa_goal: z.number().optional().describe("Opsiyonel - CPA hedefi verilirse otomatik teklif kullanilir."),
+        },
+      },
+      async (args) => {
+        try {
+          const result = await asaAdgroups.createPausedAdGroup(this.env, {
+            campaignId: args.campaign_id,
+            name: args.name,
+            defaultBidAmount: args.default_bid,
+            currency: args.currency,
+            cpaGoal: args.cpa_goal,
+          });
+          return jsonResult(result);
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "asa_adgroup_pause",
+      {
+        description: "Ad group'u PAUSED yapar. Onay gerektirmez.",
+        inputSchema: { campaign_id: z.string(), adgroup_id: z.string() },
+      },
+      async ({ campaign_id, adgroup_id }) => {
+        try {
+          await asaAdgroups.pauseAdGroup(this.env, campaign_id, adgroup_id);
+          return jsonResult({ adgroup_id, status: "PAUSED" });
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "asa_adgroup_resume_preview",
+      {
+        description: "Ad group'u ENABLED yapmadan once durumunu gosterir ve 5 dk gecerli confirm_token uretir.",
+        inputSchema: { campaign_id: z.string(), adgroup_id: z.string() },
+      },
+      async ({ campaign_id, adgroup_id }) => {
+        try {
+          const status = await asaAdgroups.getAdGroupStatus(this.env, campaign_id, adgroup_id);
+          const { token, expiresInSeconds } = this.armPending("asa_adgroup_resume", `${campaign_id}:${adgroup_id}`);
+          return jsonResult({
+            adgroup: status,
+            warning: "Bu ad group'u ENABLED yapmak GERCEK HARCAMAYI baslatabilir. Onaylamadan confirm'i cagirma.",
+            confirm_token: token,
+            expires_in_seconds: expiresInSeconds,
+          });
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "asa_adgroup_resume_confirm",
+      {
+        description: "asa_adgroup_resume_preview'den alinan confirm_token ile ad group'u GERCEKTEN ENABLED yapar.",
+        inputSchema: { campaign_id: z.string(), adgroup_id: z.string(), confirm_token: z.string() },
+      },
+      async ({ campaign_id, adgroup_id, confirm_token }) => {
+        const err = this.consumePending("asa_adgroup_resume", `${campaign_id}:${adgroup_id}`, confirm_token);
+        if (err) return errorResult(new Error(err));
+        try {
+          await asaAdgroups.resumeAdGroup(this.env, campaign_id, adgroup_id);
+          return jsonResult({ adgroup_id, status: "ENABLED" });
+        } catch (e) {
+          return errorResult(e);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "asa_adgroup_set_bid",
+      {
+        description: "Ad group'un varsayilan keyword teklifini gunceller.",
+        inputSchema: {
+          campaign_id: z.string(),
+          adgroup_id: z.string(),
+          default_bid: z.number().positive(),
+          currency: z.string().optional(),
+        },
+      },
+      async ({ campaign_id, adgroup_id, default_bid, currency }) => {
+        try {
+          await asaAdgroups.setAdGroupBid(this.env, campaign_id, adgroup_id, default_bid, currency);
+          return jsonResult({ adgroup_id, default_bid });
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    // ---- ASA Keyword ------------------------------------------------------
+
+    this.server.registerTool(
+      "asa_keyword_list",
+      {
+        description: "Bir ad group'un targeting keyword'lerini listeler.",
+        inputSchema: { campaign_id: z.string(), adgroup_id: z.string() },
+      },
+      async ({ campaign_id, adgroup_id }) => {
+        try {
+          return jsonResult(await asaKeywords.listKeywords(this.env, campaign_id, adgroup_id));
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "asa_keyword_create",
+      {
+        description:
+          "Bir ad group'a targeting keyword(ler) ekler. Bunlar dogrudan ACTIVE olur (Meta'nin PAUSED-olustur " +
+          "kuralinin aksine) - ama ad group zaten PAUSED ise harcama baslamaz, o yuzden dusuk risk kabul edildi. " +
+          "Emin degilsen once asa_adgroup_status ile ad group'un PAUSED oldugunu dogrula.",
+        inputSchema: {
+          campaign_id: z.string(),
+          adgroup_id: z.string(),
+          keywords: z
+            .array(
+              z.object({
+                text: z.string(),
+                match_type: z.enum(["EXACT", "BROAD"]),
+                bid_amount: z.number().positive().optional(),
+                currency: z.string().optional(),
+              }),
+            )
+            .min(1),
+        },
+      },
+      async ({ campaign_id, adgroup_id, keywords }) => {
+        try {
+          const result = await asaKeywords.createKeywords(
+            this.env,
+            campaign_id,
+            adgroup_id,
+            keywords.map((k) => ({ text: k.text, matchType: k.match_type, bidAmount: k.bid_amount, currency: k.currency })),
+          );
+          return jsonResult(result);
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "asa_keyword_pause",
+      {
+        description: "Bir targeting keyword'u PAUSED yapar.",
+        inputSchema: { campaign_id: z.string(), adgroup_id: z.string(), keyword_id: z.string() },
+      },
+      async ({ campaign_id, adgroup_id, keyword_id }) => {
+        try {
+          await asaKeywords.pauseKeyword(this.env, campaign_id, adgroup_id, keyword_id);
+          return jsonResult({ keyword_id, status: "PAUSED" });
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "asa_keyword_delete",
+      {
+        description: "Bir targeting keyword'u siler.",
+        inputSchema: { campaign_id: z.string(), adgroup_id: z.string(), keyword_id: z.string() },
+      },
+      async ({ campaign_id, adgroup_id, keyword_id }) => {
+        try {
+          await asaKeywords.deleteKeyword(this.env, campaign_id, adgroup_id, keyword_id);
+          return jsonResult({ keyword_id, deleted: true });
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    // ---- ASA Rapor ----------------------------------------------------------
+
+    this.server.registerTool(
+      "asa_report",
+      {
+        description: "Apple Search Ads performans raporu. level: campaign (varsayilan), adgroup, keyword.",
+        inputSchema: {
+          since: z.string().describe("YYYY-MM-DD"),
+          until: z.string().describe("YYYY-MM-DD"),
+          level: z.enum(["campaign", "adgroup", "keyword"]).default("campaign"),
+          campaign_id: z.string().optional().describe("adgroup/keyword seviyesi icin gerekli."),
+          adgroup_id: z.string().optional().describe("keyword seviyesi icin gerekli."),
+        },
+      },
+      async (args) => {
+        try {
+          const result = await asaReports.getReport(this.env, {
+            level: args.level,
+            since: args.since,
+            until: args.until,
+            campaignId: args.campaign_id,
+            adGroupId: args.adgroup_id,
+          });
+          return jsonResult(result);
         } catch (err) {
           return errorResult(err);
         }

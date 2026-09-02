@@ -118,6 +118,43 @@ görseli bir kere depoya kaydet, sonra `campaign_create`'de `images` alanında
 yüklemeye gerek kalmaz. Python CLI'daki yerel `creatives/` klasörünün uzaktan
 erişilebilir karşılığı.
 
+## Apple Search Ads (ASA)
+
+Meta'nın yanında aynı sunucuda **Apple Search Ads** entegrasyonu da var — 22 tool (`asa_` önekiyle), toplam **50 tool**.
+
+**Auth tamamen farklı**: Meta'nın uzun ömürlü access token'ının aksine, ASA
+kendi imzaladığın bir JWT ("client secret", ES256, `crypto.subtle` ile) ile
+her ~1 saatte bir yeni access token istiyor. Kurulum (bir kerelik):
+
+1. `openssl ecparam -genkey -name prime256v1 -noout -out private-key.pem`
+2. `openssl ec -in private-key.pem -pubout -out public-key.pem`
+3. Apple Ads UI → Account Settings → API (bu sekmeyi görmek için hesabında
+   **API Account Manager** ya da **API Account Read Only** rolü olmalı — Admin
+   yetmiyor; ayrı bir kullanıcı davet edip o role atamak Admin yetkisini
+   riske atmamanın en güvenli yolu) → public key'i yapıştır, kaydet →
+   `clientId`/`teamId`/`keyId` gelir
+4. `orgId`'yi bulmak için: `openssl pkcs8 -topk8 -nocrypt -in private-key.pem -out private-key-pkcs8.pem`,
+   sonra bu PKCS8 key ile JWT imzalayıp `GET /v5/acls` çağır (ya da worker deploy edildikten
+   sonra `asa_org_info` tool'unu kullan)
+5. Secrets: `wrangler secret put ASA_CLIENT_ID/ASA_TEAM_ID/ASA_KEY_ID/ASA_ORG_ID/ASA_ADAM_ID/ASA_PRIVATE_KEY`
+   (`ASA_PRIVATE_KEY` = **PKCS8** PEM içeriği, SEC1 değil — Web Crypto `importKey("pkcs8", ...)` SEC1 kabul etmiyor)
+
+**API versiyonu**: v4 deprecated (`INVALID_API_VERSION` hatası verir), **v5** kullanılmalı.
+
+**Tool'lar**: `asa_org_info`; kampanya (`asa_campaign_list/status/create/pause/resume_preview+confirm/set_budget/delete_preview+confirm`);
+ad group (`asa_adgroup_list/status/create/pause/resume_preview+confirm/set_bid`);
+keyword (`asa_keyword_list/create/pause/delete` — resume/confirm akışı yok, ad
+group zaten PAUSED/kontrollüyse düşük risk kabul edildi); `asa_report`
+(level: campaign/adgroup/keyword — **not**: `selector.orderBy` zorunlu ve
+`groupBy`'da olmayan bir alanı referans alamaz, bkz. `src/asa/reports.ts`).
+
+Güvenlik deseni Meta ile birebir aynı: `asa_campaign_create`/`asa_adgroup_create`
+her zaman PAUSED; resume işlemleri preview+confirm_token gerektirir (aynı
+genelleştirilmiş `this.state.pending` mekanizması).
+
+Gerçek hesaba karşı test edildi (2026-09-02): kampanya+ad group+keyword
+oluşturma, rapor çekme, delete_preview/confirm — hepsi uçtan uca doğrulandı.
+
 **Telefondan görsel yükleme**: `https://.../upload` — Basic Auth ile korumalı
 (kullanıcı adı önemsiz, parola `MCP_ADMIN_PASSWORD`), mobil tarayıcıdan
 galeriden doğrudan dosya seçip yükleyebileceğin bir sayfa. `creative_store_upload_from_url`

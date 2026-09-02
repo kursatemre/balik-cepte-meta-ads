@@ -11,3 +11,13 @@ META_AD_ACCOUNT_ID=act_244832992826003
 META_PAGE_ID=190068084900577
 META_PROMOTED_APP_ID=
 META_APP_STORE_URL=https://apps.apple.com/tr/app/id6765955082
+
+# Apple Search Ads - bkz. README.md "Apple Search Ads (ASA)" bolumu
+ASA_CLIENT_ID=
+ASA_TEAM_ID=
+ASA_KEY_ID=
+ASA_ORG_ID=
+ASA_ADAM_ID=6765955082
+# PKCS8 PEM icerigi (SEC1 degil) - tek satirda \n ile ya da wrangler dev
+# .dev.vars'ta coklu satiri destekler, dosyaya oldugu gibi yapistir.
+ASA_PRIVATE_KEY=
