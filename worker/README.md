@@ -155,6 +155,58 @@ genelleştirilmiş `this.state.pending` mekanizması).
 Gerçek hesaba karşı test edildi (2026-09-02): kampanya+ad group+keyword
 oluşturma, rapor çekme, delete_preview/confirm — hepsi uçtan uca doğrulandı.
 
+## Google Ads
+
+Aynı sunucuda üçüncü platform: **Google Ads** — 22 tool (`gads_` önekiyle), toplam **72 tool**.
+
+**Durum (2026-09-03)**: Auth zinciri kuruldu ve doğrulandı, ama Google'ın
+**Developer Token Basic Access onayı bekleniyor** (5-14 iş günü) — onay
+gelene kadar `gads_org_info` dışındaki tüm tool'lar `DEVELOPER_TOKEN_NOT_APPROVED`
+hatası döner (bu beklenen, hata değil). Ayrıca Balık Cepte'nin kendi Google
+Ads (client) hesabı MCC altında henüz oluşturulmadıysa `GADS_CUSTOMER_ID`
+secret'ı boş kalır ve kampanya tool'ları açık bir hata mesajıyla reddeder.
+
+**Auth Meta'ya benzer** (ASA'nın JWT'sinden farklı) — standart OAuth2
+`refresh_token` grant:
+
+1. Google Cloud Console'da proje oluştur, **Google Ads API**'yi etkinleştir
+2. **APIs & Services → Credentials** (yeni arayüzde **Google Auth Platform →
+   Clients**) → **Create client** → **Desktop app** → Client ID/Secret al
+3. Google Ads'te bir **Manager (MCC) hesabı** oluştur (API Center bu hesap
+   dışında görünmez) → **Tools & Settings → Setup → API Center** → Developer
+   Token başvurusu → önce "Test Account" seviyesinde anında token gelir,
+   gerçek hesaplar için ayrıca **"Basic Access başvurusu"** yapılmalı (form:
+   Cloud proje numarası, tasarım dokümanı vb. ister)
+4. Refresh token almak için OAuth consent flow'u (Desktop app, loopback
+   `http://localhost:PORT/callback`, scope `https://www.googleapis.com/auth/adwords`,
+   `access_type=offline&prompt=consent`) — bu oturumda yerel bir Node
+   dinleyiciyle yapıldı, script örneği için git geçmişine bak
+5. Secrets: `wrangler secret put GADS_CLIENT_ID/GADS_CLIENT_SECRET/GADS_REFRESH_TOKEN/GADS_DEVELOPER_TOKEN/GADS_LOGIN_CUSTOMER_ID/GADS_CUSTOMER_ID`
+   (`GADS_LOGIN_CUSTOMER_ID` = MCC id tiresiz, `GADS_CUSTOMER_ID` = Balık
+   Cepte'nin kendi hesap id'si)
+
+⚠️ **OAuth consent screen "Testing" modundayken refresh token sadece 7 gün
+geçerli.** Basic Access onayı bundan uzun sürerse adım 4'ü tekrarla. "In
+production"a almak (bu, `https://www.googleapis.com/auth/adwords` hassas
+scope olduğu için Google'ın ayrı bir doğrulamasını gerektirir) kalıcı çözüm.
+
+**Mimari farklar** (Meta/ASA'dan): para birimi **micros** (1 birim =
+1.000.000 micros); bütçe ayrı bir `CampaignBudget` kaynağı, kampanya ona
+referans verir; "silme" gerçekte yok, `status=REMOVED`'a çekiliyor
+(kalıcı); API versiyonu **v25**, REST arayüzü (`googleAds:search` GAQL
+sorguları için, `:mutate` yazma işlemleri için).
+
+**Tool'lar**: `gads_org_info` (Basic Access gerektirmez); kampanya
+(`gads_campaign_list/status/create/pause/resume_preview+confirm/set_budget/delete_preview+confirm`);
+ad group (`gads_adgroup_list/status/create/pause/resume_preview+confirm/set_bid`);
+keyword (`gads_keyword_list/create/pause/delete`); `gads_report`.
+
+**Test durumu**: `gads_org_info` gerçek hesaba karşı doğrulandı (auth çalışıyor).
+Kampanya/ad group/keyword mutate çağrıları Basic Access onayından önce test
+edilemedi — payload şekilleri Google Ads API'nin bilinen desenlerinden
+yazıldı, onay gelince Meta/ASA'da yapıldığı gibi gerçek hatalara göre
+iteratif düzeltilecek.
+
 **Telefondan görsel yükleme**: `https://.../upload` — Basic Auth ile korumalı
 (kullanıcı adı önemsiz, parola `MCP_ADMIN_PASSWORD`), mobil tarayıcıdan
 galeriden doğrudan dosya seçip yükleyebileceğin bir sayfa. `creative_store_upload_from_url`

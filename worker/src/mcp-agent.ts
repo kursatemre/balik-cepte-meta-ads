@@ -30,6 +30,13 @@ import * as asaKeywords from "./asa/keywords";
 import * as asaReports from "./asa/reports";
 import { AsaApiError } from "./asa/client";
 
+import * as gadsAccount from "./gads/account";
+import * as gadsAdgroups from "./gads/adgroups";
+import * as gadsCampaigns from "./gads/campaigns";
+import * as gadsKeywords from "./gads/keywords";
+import * as gadsReports from "./gads/reports";
+import { GadsApiError } from "./gads/client";
+
 type Props = { userId: string };
 
 type PendingKind =
@@ -39,7 +46,10 @@ type PendingKind =
   | "campaign_delete"
   | "asa_campaign_resume"
   | "asa_adgroup_resume"
-  | "asa_campaign_delete";
+  | "asa_campaign_delete"
+  | "gads_campaign_resume"
+  | "gads_adgroup_resume"
+  | "gads_campaign_delete";
 
 interface PendingAction {
   kind: PendingKind;
@@ -54,7 +64,7 @@ const CONFIRM_TOKEN_TTL_MS = 5 * 60 * 1000;
 
 function errorResult(err: unknown) {
   const text =
-    err instanceof MetaApiError || err instanceof AsaApiError
+    err instanceof MetaApiError || err instanceof AsaApiError || err instanceof GadsApiError
       ? err.format()
       : err instanceof Error
         ? err.message
@@ -1146,6 +1156,422 @@ export class BalikCepteMcp extends McpAgent<Env, State, Props> {
       async (args) => {
         try {
           const result = await asaReports.getReport(this.env, {
+            level: args.level,
+            since: args.since,
+            until: args.until,
+            campaignId: args.campaign_id,
+            adGroupId: args.adgroup_id,
+          });
+          return jsonResult(result);
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    // =====================================================================
+    // Google Ads
+    // =====================================================================
+    // NOT: Basic Access onayi bu oturumda bekleniyordu (5-14 is gunu) - bu
+    // yuzden asagidaki mutate/search cagrilari canli test edilemedi. Auth
+    // zinciri (listAccessibleCustomers) dogrulandi. gads_org_info dogrulama
+    // icin kullanilabilir, digerleri onay gelince Meta/ASA gibi iteratif
+    // duzeltilecek.
+
+    this.server.registerTool(
+      "gads_org_info",
+      {
+        description:
+          "Google Ads baglanti/hesap bilgisini gosterir (erisilebilir customer id'ler, Balik Cepte customer id'si " +
+          "ayarli mi) - Basic Access onayi gerektirmez, auth dogrulama icin kullan.",
+        inputSchema: {},
+      },
+      async () => {
+        try {
+          return jsonResult(await gadsAccount.getOrgInfo(this.env));
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    // ---- Google Ads Kampanya --------------------------------------------
+
+    this.server.registerTool(
+      "gads_campaign_list",
+      { description: "Google Ads kampanyalarini listeler.", inputSchema: {} },
+      async () => {
+        try {
+          return jsonResult(await gadsCampaigns.listCampaigns(this.env));
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "gads_campaign_status",
+      { description: "Bir Google Ads kampanyasinin durumunu gosterir.", inputSchema: { campaign_id: z.string() } },
+      async ({ campaign_id }) => {
+        try {
+          return jsonResult(await gadsCampaigns.getCampaignStatus(this.env, campaign_id));
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "gads_campaign_create",
+      {
+        description:
+          "Yeni bir Google Ads Search kampanyasi (+ butce kaynagi) olusturur. GUVENLIK: HER ZAMAN PAUSED " +
+          "olusturulur. Aktif etmek icin gads_campaign_resume_preview + confirm gerekir. NOT: Bu ilk surum " +
+          "cografi hedefleme (location criteria) eklemiyor - varsayilan olarak Google'in genel ayarlarina " +
+          "tabidir, gerekirse elle Google Ads UI'dan hedefleme eklenmeli.",
+        inputSchema: {
+          name: z.string(),
+          daily_budget: z.number().positive().describe("Gunluk butce (hesabin para biriminde)."),
+        },
+      },
+      async (args) => {
+        try {
+          const result = await gadsCampaigns.createPausedCampaign(this.env, {
+            name: args.name,
+            dailyBudget: args.daily_budget,
+          });
+          return jsonResult(result);
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "gads_campaign_pause",
+      { description: "Kampanyayi PAUSED yapar. Onay gerektirmez.", inputSchema: { campaign_id: z.string() } },
+      async ({ campaign_id }) => {
+        try {
+          await gadsCampaigns.pauseCampaign(this.env, campaign_id);
+          return jsonResult({ campaign_id, status: "PAUSED" });
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "gads_campaign_resume_preview",
+      {
+        description: "Kampanyayi ENABLED yapmadan once durumunu gosterir ve 5 dk gecerli confirm_token uretir.",
+        inputSchema: { campaign_id: z.string() },
+      },
+      async ({ campaign_id }) => {
+        try {
+          const status = await gadsCampaigns.getCampaignStatus(this.env, campaign_id);
+          const { token, expiresInSeconds } = this.armPending("gads_campaign_resume", campaign_id);
+          return jsonResult({
+            campaign: status,
+            warning: "Bu kampanyayi ENABLED yapmak GERCEK HARCAMAYI baslatir. Onaylamadan confirm'i cagirma.",
+            confirm_token: token,
+            expires_in_seconds: expiresInSeconds,
+          });
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "gads_campaign_resume_confirm",
+      {
+        description: "gads_campaign_resume_preview'den alinan confirm_token ile kampanyayi GERCEKTEN ENABLED yapar.",
+        inputSchema: { campaign_id: z.string(), confirm_token: z.string() },
+      },
+      async ({ campaign_id, confirm_token }) => {
+        const err = this.consumePending("gads_campaign_resume", campaign_id, confirm_token);
+        if (err) return errorResult(new Error(err));
+        try {
+          await gadsCampaigns.resumeCampaign(this.env, campaign_id);
+          return jsonResult({ campaign_id, status: "ENABLED" });
+        } catch (e) {
+          return errorResult(e);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "gads_campaign_set_budget",
+      {
+        description: "Kampanyanin gunluk butcesini gunceller (ayri CampaignBudget kaynagini).",
+        inputSchema: { campaign_id: z.string(), daily_budget: z.number().positive() },
+      },
+      async ({ campaign_id, daily_budget }) => {
+        try {
+          await gadsCampaigns.setCampaignBudget(this.env, campaign_id, daily_budget);
+          return jsonResult({ campaign_id, daily_budget });
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "gads_campaign_delete_preview",
+      {
+        description:
+          "Kampanyayi silmeden once (status=REMOVED) durumunu gosterir ve confirm_token uretir. PAUSED " +
+          "degilse reddedilir. KALICIDIR, geri alinamaz.",
+        inputSchema: { campaign_id: z.string() },
+      },
+      async ({ campaign_id }) => {
+        try {
+          const status = await gadsCampaigns.getCampaignStatus(this.env, campaign_id);
+          if (status.status !== "PAUSED") {
+            throw new Error(`Kampanya '${status.name}' su an ${status.status} - once gads_campaign_pause ile durdur.`);
+          }
+          const { token, expiresInSeconds } = this.armPending("gads_campaign_delete", campaign_id);
+          return jsonResult({
+            campaign: status,
+            warning: "Bu kampanyayi kaldirmak KALICIDIR ve geri alinamaz.",
+            confirm_token: token,
+            expires_in_seconds: expiresInSeconds,
+          });
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "gads_campaign_delete_confirm",
+      {
+        description: "gads_campaign_delete_preview'den alinan confirm_token ile kampanyayi KALICI olarak kaldirir.",
+        inputSchema: { campaign_id: z.string(), confirm_token: z.string() },
+      },
+      async ({ campaign_id, confirm_token }) => {
+        const err = this.consumePending("gads_campaign_delete", campaign_id, confirm_token);
+        if (err) return errorResult(new Error(err));
+        try {
+          await gadsCampaigns.deleteCampaign(this.env, campaign_id);
+          return jsonResult({ campaign_id, deleted: true });
+        } catch (e) {
+          return errorResult(e);
+        }
+      },
+    );
+
+    // ---- Google Ads Ad Group ---------------------------------------------
+
+    this.server.registerTool(
+      "gads_adgroup_list",
+      { description: "Bir kampanyanin ad group'larini listeler.", inputSchema: { campaign_id: z.string() } },
+      async ({ campaign_id }) => {
+        try {
+          return jsonResult(await gadsAdgroups.listAdGroups(this.env, campaign_id));
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "gads_adgroup_status",
+      { description: "Bir ad group'un durumunu gosterir.", inputSchema: { adgroup_id: z.string() } },
+      async ({ adgroup_id }) => {
+        try {
+          return jsonResult(await gadsAdgroups.getAdGroupStatus(this.env, adgroup_id));
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "gads_adgroup_create",
+      {
+        description: "Bir kampanya altinda yeni ad group olusturur. GUVENLIK: HER ZAMAN PAUSED olusturulur.",
+        inputSchema: { campaign_id: z.string(), name: z.string(), cpc_bid: z.number().positive() },
+      },
+      async (args) => {
+        try {
+          const result = await gadsAdgroups.createPausedAdGroup(this.env, {
+            campaignId: args.campaign_id,
+            name: args.name,
+            cpcBid: args.cpc_bid,
+          });
+          return jsonResult(result);
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "gads_adgroup_pause",
+      { description: "Ad group'u PAUSED yapar. Onay gerektirmez.", inputSchema: { adgroup_id: z.string() } },
+      async ({ adgroup_id }) => {
+        try {
+          await gadsAdgroups.pauseAdGroup(this.env, adgroup_id);
+          return jsonResult({ adgroup_id, status: "PAUSED" });
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "gads_adgroup_resume_preview",
+      {
+        description: "Ad group'u ENABLED yapmadan once durumunu gosterir ve 5 dk gecerli confirm_token uretir.",
+        inputSchema: { adgroup_id: z.string() },
+      },
+      async ({ adgroup_id }) => {
+        try {
+          const status = await gadsAdgroups.getAdGroupStatus(this.env, adgroup_id);
+          const { token, expiresInSeconds } = this.armPending("gads_adgroup_resume", adgroup_id);
+          return jsonResult({
+            adgroup: status,
+            warning: "Bu ad group'u ENABLED yapmak GERCEK HARCAMAYI baslatabilir. Onaylamadan confirm'i cagirma.",
+            confirm_token: token,
+            expires_in_seconds: expiresInSeconds,
+          });
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "gads_adgroup_resume_confirm",
+      {
+        description: "gads_adgroup_resume_preview'den alinan confirm_token ile ad group'u GERCEKTEN ENABLED yapar.",
+        inputSchema: { adgroup_id: z.string(), confirm_token: z.string() },
+      },
+      async ({ adgroup_id, confirm_token }) => {
+        const err = this.consumePending("gads_adgroup_resume", adgroup_id, confirm_token);
+        if (err) return errorResult(new Error(err));
+        try {
+          await gadsAdgroups.resumeAdGroup(this.env, adgroup_id);
+          return jsonResult({ adgroup_id, status: "ENABLED" });
+        } catch (e) {
+          return errorResult(e);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "gads_adgroup_set_bid",
+      {
+        description: "Ad group'un CPC teklifini gunceller.",
+        inputSchema: { adgroup_id: z.string(), cpc_bid: z.number().positive() },
+      },
+      async ({ adgroup_id, cpc_bid }) => {
+        try {
+          await gadsAdgroups.setAdGroupBid(this.env, adgroup_id, cpc_bid);
+          return jsonResult({ adgroup_id, cpc_bid });
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    // ---- Google Ads Keyword ------------------------------------------------
+
+    this.server.registerTool(
+      "gads_keyword_list",
+      { description: "Bir ad group'un targeting keyword'lerini listeler.", inputSchema: { adgroup_id: z.string() } },
+      async ({ adgroup_id }) => {
+        try {
+          return jsonResult(await gadsKeywords.listKeywords(this.env, adgroup_id));
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "gads_keyword_create",
+      {
+        description:
+          "Bir ad group'a targeting keyword(ler) ekler. Bunlar dogrudan ENABLED olur - ad group PAUSED ise " +
+          "harcama baslamaz, dusuk risk kabul edildi (ASA'daki ayni mantik).",
+        inputSchema: {
+          adgroup_id: z.string(),
+          keywords: z
+            .array(
+              z.object({
+                text: z.string(),
+                match_type: z.enum(["EXACT", "PHRASE", "BROAD"]),
+                cpc_bid: z.number().positive().optional(),
+              }),
+            )
+            .min(1),
+        },
+      },
+      async ({ adgroup_id, keywords }) => {
+        try {
+          const result = await gadsKeywords.createKeywords(
+            this.env,
+            adgroup_id,
+            keywords.map((k) => ({ text: k.text, matchType: k.match_type, cpcBid: k.cpc_bid })),
+          );
+          return jsonResult(result);
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "gads_keyword_pause",
+      {
+        description: "Bir targeting keyword'u PAUSED yapar.",
+        inputSchema: { adgroup_id: z.string(), criterion_id: z.string() },
+      },
+      async ({ adgroup_id, criterion_id }) => {
+        try {
+          await gadsKeywords.pauseKeyword(this.env, adgroup_id, criterion_id);
+          return jsonResult({ criterion_id, status: "PAUSED" });
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "gads_keyword_delete",
+      {
+        description: "Bir targeting keyword'u kaldirir.",
+        inputSchema: { adgroup_id: z.string(), criterion_id: z.string() },
+      },
+      async ({ adgroup_id, criterion_id }) => {
+        try {
+          await gadsKeywords.deleteKeyword(this.env, adgroup_id, criterion_id);
+          return jsonResult({ criterion_id, deleted: true });
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    // ---- Google Ads Rapor ----------------------------------------------------
+
+    this.server.registerTool(
+      "gads_report",
+      {
+        description: "Google Ads performans raporu. level: campaign (varsayilan), adgroup, keyword.",
+        inputSchema: {
+          since: z.string().describe("YYYY-MM-DD"),
+          until: z.string().describe("YYYY-MM-DD"),
+          level: z.enum(["campaign", "adgroup", "keyword"]).default("campaign"),
+          campaign_id: z.string().optional().describe("adgroup seviyesinde filtre icin."),
+          adgroup_id: z.string().optional().describe("keyword seviyesinde filtre icin."),
+        },
+      },
+      async (args) => {
+        try {
+          const result = await gadsReports.getReport(this.env, {
             level: args.level,
             since: args.since,
             until: args.until,

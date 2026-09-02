@@ -28,5 +28,13 @@ declare global {
     ASA_ORG_ID: string;
     ASA_ADAM_ID: string; // App Store numeric id (Balik Cepte)
     ASA_PRIVATE_KEY: string; // PKCS8 PEM
+
+    // Google Ads - bkz. src/gads/client.ts
+    GADS_CLIENT_ID: string;
+    GADS_CLIENT_SECRET: string;
+    GADS_REFRESH_TOKEN: string;
+    GADS_DEVELOPER_TOKEN: string;
+    GADS_LOGIN_CUSTOMER_ID: string; // MCC id, tiresiz
+    GADS_CUSTOMER_ID?: string; // Balik Cepte'nin kendi hesabi - hesap olusana kadar bos olabilir
   }
 }
