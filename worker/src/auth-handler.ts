@@ -14,10 +14,15 @@
  */
 import { Hono } from "hono";
 import { AuthorizationError, type AuthRequest, type OAuthHelpers } from "@cloudflare/workers-oauth-provider";
+import { UploadHandler } from "./upload-handler";
 
 type Bindings = Env & { OAUTH_PROVIDER: OAuthHelpers };
 
 const app = new Hono<{ Bindings: Bindings }>();
+
+// /mcp disindaki her istek buraya (defaultHandler) dusuyor - /upload'i da
+// burada mount ediyoruz (Basic Auth ile kendi icinde korumali).
+app.route("/upload", UploadHandler);
 
 function htmlResponse(body: string, status = 200): Response {
   return new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8" } });

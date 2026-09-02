@@ -93,6 +93,14 @@ görseli bir kere depoya kaydet, sonra `campaign_create`'de `images` alanında
 yüklemeye gerek kalmaz. Python CLI'daki yerel `creatives/` klasörünün uzaktan
 erişilebilir karşılığı.
 
+**Telefondan görsel yükleme**: `https://.../upload` — Basic Auth ile korumalı
+(kullanıcı adı önemsiz, parola `MCP_ADMIN_PASSWORD`), mobil tarayıcıdan
+galeriden doğrudan dosya seçip yükleyebileceğin bir sayfa. `creative_store_upload_from_url`
+zaten barındırılmış bir URL gerektiriyordu ve Claude (model olarak) sohbette
+gördüğü bir görselin ham byte'larını harfiyen base64 olarak yeniden üretemez
+(vision girdisi tersine çevrilemez) — bu sayfa "görseli önce bir yere
+barındırmam lazım" sorununu asıl çözen adım.
+
 ## Test edildi mi?
 
 Evet — bu oturumda gerçek deploy'a karşı: OAuth (DCR + PKCE + password login +
