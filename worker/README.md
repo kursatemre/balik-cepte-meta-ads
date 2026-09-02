@@ -159,12 +159,18 @@ oluşturma, rapor çekme, delete_preview/confirm — hepsi uçtan uca doğruland
 
 Aynı sunucuda üçüncü platform: **Google Ads** — 22 tool (`gads_` önekiyle), toplam **72 tool**.
 
-**Durum (2026-09-03)**: Auth zinciri kuruldu ve doğrulandı, ama Google'ın
-**Developer Token Basic Access onayı bekleniyor** (5-14 iş günü) — onay
-gelene kadar `gads_org_info` dışındaki tüm tool'lar `DEVELOPER_TOKEN_NOT_APPROVED`
-hatası döner (bu beklenen, hata değil). Ayrıca Balık Cepte'nin kendi Google
-Ads (client) hesabı MCC altında henüz oluşturulmadıysa `GADS_CUSTOMER_ID`
-secret'ı boş kalır ve kampanya tool'ları açık bir hata mesajıyla reddeder.
+**Durum (2026-09-03)**: Auth zinciri kuruldu ve doğrulandı. Balık Cepte'nin
+kendi Google Ads hesabı oluşturuldu (`149-426-8690` / `1494268690`,
+`GADS_CUSTOMER_ID` secret olarak ayarlı) ama şu an **hesap faturalandırma
+kurulmadığı için `CUSTOMER_NOT_ENABLED` hatası veriyor** — Google Ads'te
+Faturalandırma ayarlarının tamamlanması gerekiyor.
+
+**Basic Access başvurusu gerçekten gönderildi** (2026-09-03,
+"We have received your Google Ads API Basic Access application.") — standart
+inceleme 5 iş günü içinde başlıyor (kesin sure garantisi yok, ek bilgi
+istenebilir). "Brand verification" tamamlanırsa hızlanabiliyor. Onay gelene
+kadar `gads_org_info` dışındaki tüm tool'lar `DEVELOPER_TOKEN_NOT_APPROVED`
+hatası döner (bu beklenen, hata değil).
 
 **Auth Meta'ya benzer** (ASA'nın JWT'sinden farklı) — standart OAuth2
 `refresh_token` grant:
