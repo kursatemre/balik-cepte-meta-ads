@@ -79,12 +79,37 @@ Yerel test için `.dev.vars.example`'ı `.dev.vars` olarak kopyala, doldur,
    MCP_ADMIN_PASSWORD` ile yenisini ayarla)
 4. Onayla — bundan sonra token kalıcı, her seferinde tekrar giriş gerekmez.
 
-## Araçlar (tools)
+## Araçlar (tools) — 28 tool
 
-`audience_status`, `campaign_status`, `campaign_create`, `campaign_pause`,
-`campaign_resume_preview`, `campaign_resume_confirm`, `campaign_set_budget`,
-`report` — her biri `cli.py`'deki komutlarla birebir eşleşiyor, detaylar için
-tool açıklamalarına (Claude içinde görünür) ya da `src/mcp-agent.ts`'e bak.
+**Kitle**: `audience_list`, `audience_status`
+
+**Kampanya**: `campaign_list`, `campaign_status`, `campaign_create`,
+`campaign_pause`, `campaign_resume_preview`/`campaign_resume_confirm`,
+`campaign_set_budget` (sadece CBO/kampanya-butceli kampanyalar icin —
+bkz. asagida), `campaign_delete_preview`/`campaign_delete_confirm`
+
+**Ad Set**: `adset_list`, `adset_status`, `adset_pause`,
+`adset_resume_preview`/`adset_resume_confirm`, `adset_set_budget`
+
+**Ad**: `ad_list`, `ad_status`, `ad_pause`,
+`ad_resume_preview`/`ad_resume_confirm`, `ad_preview` (gorsel QA - reklamin
+gercekte nasil gorunecegini HTML olarak getirir)
+
+**Rapor**: `report` (level: campaign/adset/ad kirilimi destekler)
+
+⚠️ **`campaign_set_budget` vs `adset_set_budget`**: bu proje olusturdugu her
+kampanyada butceyi HER ZAMAN ad-set seviyesinde ayarliyor (CBO kapali) - bu
+yuzden kendi kampanyalarimiz icin **`adset_set_budget`** kullanilmali,
+`campaign_set_budget` etkisiz kalir (sadece disaridan/elle CBO ile
+olusturulmus kampanyalar icin anlamli).
+
+**Tehlikeli islemler (resume, delete) icin ortak guvenlik deseni**: her biri
+iki adimli - once `*_preview` (durumu gosterir + 5 dk gecerli `confirm_token`
+uretir), sonra dogru token'la `*_confirm`. Tek bir "pending" slotu var - yeni
+bir preview, bir onceki bekleyen islemi gecersiz kilar.
+
+Detaylar icin tool aciklamalarina (Claude icinde gorunur) ya da
+`src/mcp-agent.ts`'e bak.
 
 **Görsel deposu (R2)**: `creative_store_list`, `creative_store_upload`
 (base64), `creative_store_upload_from_url`, `creative_store_delete`. Bir

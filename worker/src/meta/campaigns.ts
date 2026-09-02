@@ -15,7 +15,7 @@
  * Ayrica: minimum ad-set gunluk butcesi hesaba gore degisir (bu oturumda
  * act_244832992826003 icin ~48.23 TRY idi) - dusuk deger acik bir hata doner.
  */
-import { adAccountPath, graphRequest, type MetaEnv } from "./client";
+import { adAccountPath, graphRequest, graphRequestPaged, type MetaEnv } from "./client";
 import { ensureAudienceReady } from "./audiences";
 import {
   buildCarouselCreative,
@@ -231,6 +231,16 @@ export async function createPausedCampaign(
   };
 }
 
+export async function listCampaigns(
+  env: MetaEnv,
+  opts: { status?: string[]; limit?: number } = {},
+): Promise<Record<string, unknown>[]> {
+  const fields = ["id", "name", "status", "objective", "daily_budget"].join(",");
+  const params: Record<string, unknown> = { fields, limit: opts.limit ?? 50 };
+  if (opts.status?.length) params.effective_status = opts.status;
+  return await graphRequestPaged(env, adAccountPath(env, "campaigns"), params);
+}
+
 export async function pauseCampaign(env: MetaEnv, campaignId: string): Promise<void> {
   await graphRequest(env, `/${campaignId}`, { method: "POST", params: { status: "PAUSED" } });
 }
@@ -240,6 +250,13 @@ export async function resumeCampaign(env: MetaEnv, campaignId: string): Promise<
   await graphRequest(env, `/${campaignId}`, { method: "POST", params: { status: "ACTIVE" } });
 }
 
+/**
+ * Kampanya (CBO) gunluk butcesini gunceller. NOT: bu proje olusturdugu her
+ * kampanyada butceyi ad-set seviyesinde ayarliyor (CBO kapali) - bu fonksiyon
+ * o kampanyalarda etkisiz kalir. Gercek degisiklik icin meta/adsets.ts'deki
+ * setAdSetBudget kullanilmali. Bu fonksiyon sadece CBO acik, disaridan/elle
+ * olusturulmus kampanyalar icin anlamli.
+ */
 export async function setCampaignBudget(
   env: MetaEnv,
   campaignId: string,
@@ -254,4 +271,9 @@ export async function setCampaignBudget(
 export async function getCampaignStatus(env: MetaEnv, campaignId: string): Promise<Record<string, unknown>> {
   const fields = ["name", "status", "daily_budget", "objective"].join(",");
   return await graphRequest(env, `/${campaignId}`, { params: { fields } });
+}
+
+/** DIKKAT: Kalicidir, geri alinamaz. Tool katmani sadece PAUSED kampanyalar icin ve onayla izin verir. */
+export async function deleteCampaign(env: MetaEnv, campaignId: string): Promise<void> {
+  await graphRequest(env, `/${campaignId}`, { method: "DELETE" });
 }

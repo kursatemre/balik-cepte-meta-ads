@@ -1,18 +1,22 @@
 /**
  * Balik Cepte Meta Ads MCP sunucusu.
  *
- * cli.py'deki her komut icin bir tool - tek fark `campaign resume`: CLI'daki
- * interaktif "y/n" onayinin yerini, tek bir MCP cagrisinin stdin okuyamamasi
- * yuzunden, iki asamali bir akis aliyor:
- *   1) campaign_resume_preview  -> durumu gosterir + kisa omurlu confirm_token uretir
- *   2) campaign_resume_confirm -> sadece dogru token ile ACTIVE yapar
- * Boylece mobilden tek bir mesajla ("su kampanyayi aktif et") yanlislikla
- * gercek harcama baslamaz - Claude once preview'i gormek zorunda.
+ * cli.py'deki her komut icin bir tool, artik ad-set ve reklam seviyesinde
+ * de kontrol var. Harcama baslatan/kalici olan islemler (resume, delete)
+ * icin CLI'daki interaktif "y/n" onayinin yerini, tek bir MCP cagrisinin
+ * stdin okuyamamasi yuzunden, iki asamali bir akis aliyor:
+ *   1) *_preview  -> durumu gosterir + kisa omurlu confirm_token uretir
+ *   2) *_confirm -> sadece dogru token ile gercek islemi yapar
+ * Tek bir "pending" slotu var (this.state.pending) - yeni bir preview,
+ * bir onceki bekleyen islemi gecersiz kilar. Boylece mobilden tek bir
+ * mesajla yanlislikla harcama baslamaz / kampanya silinmez.
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpAgent } from "agents/mcp";
 import { z } from "zod";
 
+import * as ads from "./meta/ads";
+import * as adsets from "./meta/adsets";
 import * as audiences from "./meta/audiences";
 import * as campaigns from "./meta/campaigns";
 import * as reports from "./meta/reports";
@@ -21,15 +25,18 @@ import { MetaApiError } from "./meta/client";
 
 type Props = { userId: string };
 
-interface PendingResume {
-  campaignId: string;
+type PendingKind = "campaign_resume" | "adset_resume" | "ad_resume" | "campaign_delete";
+
+interface PendingAction {
+  kind: PendingKind;
+  targetId: string;
   token: string;
   expiresAt: number;
 }
 
-type State = { pendingResume: PendingResume | null };
+type State = { pending: PendingAction | null };
 
-const RESUME_TOKEN_TTL_MS = 5 * 60 * 1000;
+const CONFIRM_TOKEN_TTL_MS = 5 * 60 * 1000;
 
 function errorResult(err: unknown) {
   const text = err instanceof MetaApiError ? err.format() : err instanceof Error ? err.message : String(err);
@@ -46,16 +53,62 @@ const imageInputSchema = z.union([
   z.object({
     key: z
       .string()
-      .describe("creative_store_upload / creative_store_upload_from_url ile depoya kaydedilmis bir gorselin anahtari."),
+      .describe(
+        "creative_store_upload / creative_store_upload_from_url / mobil /upload sayfasi ile depoya kaydedilmis bir gorselin anahtari.",
+      ),
   }),
 ]);
+
+const statusFilterSchema = z
+  .array(z.string())
+  .optional()
+  .describe('effective_status filtresi, orn. ["ACTIVE"], ["PAUSED"]. Verilmezse hepsi.');
 
 export class BalikCepteMcp extends McpAgent<Env, State, Props> {
   server = new McpServer({ name: "Balik Cepte Meta Ads", version: "1.0.0" });
 
-  initialState: State = { pendingResume: null };
+  initialState: State = { pending: null };
+
+  /** Bir preview tool'unun sonunda cagrilir - eski pending'i ezer, yeni token doner. */
+  private armPending(kind: PendingKind, targetId: string): { token: string; expiresInSeconds: number } {
+    const token = crypto.randomUUID();
+    const expiresAt = Date.now() + CONFIRM_TOKEN_TTL_MS;
+    this.setState({ pending: { kind, targetId, token, expiresAt } });
+    return { token, expiresInSeconds: CONFIRM_TOKEN_TTL_MS / 1000 };
+  }
+
+  /** Bir confirm tool'unun basinda cagrilir - gecerliyse pending'i tuketir (null'lar), hata metni ya da null doner. */
+  private consumePending(kind: PendingKind, targetId: string, token: string): string | null {
+    const pending = this.state.pending;
+    if (!pending || pending.kind !== kind || pending.targetId !== targetId || pending.token !== token) {
+      return "Gecersiz ya da eslesmeyen confirm_token. Once ilgili preview tool'unu bu id ile cagir.";
+    }
+    if (Date.now() > pending.expiresAt) {
+      this.setState({ pending: null });
+      return "confirm_token'in suresi doldu (5 dk). Preview tool'unu tekrar cagir.";
+    }
+    this.setState({ pending: null });
+    return null;
+  }
 
   async init() {
+    // ---- Audience ----------------------------------------------------
+
+    this.server.registerTool(
+      "audience_list",
+      {
+        description: "Hesaptaki Custom Audience'lari listeler (id, ad, yaklasik boyut, delivery_status).",
+        inputSchema: {},
+      },
+      async () => {
+        try {
+          return jsonResult(await audiences.listAudiences(this.env));
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
     this.server.registerTool(
       "audience_status",
       {
@@ -66,6 +119,23 @@ export class BalikCepteMcp extends McpAgent<Env, State, Props> {
       async ({ audience_id }) => {
         try {
           return jsonResult(await audiences.getAudienceStatus(this.env, audience_id));
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    // ---- Campaign -------------------------------------------------------
+
+    this.server.registerTool(
+      "campaign_list",
+      {
+        description: "Hesaptaki kampanyalari listeler (id, ad, durum, objective, gunluk butce).",
+        inputSchema: { status: statusFilterSchema },
+      },
+      async ({ status }) => {
+        try {
+          return jsonResult(await campaigns.listCampaigns(this.env, { status }));
         } catch (err) {
           return errorResult(err);
         }
@@ -116,7 +186,7 @@ export class BalikCepteMcp extends McpAgent<Env, State, Props> {
                 "civariydi) - dusukse acik bir 'Butce Cok Dusuk' hatasi doner.",
             ),
           audience_id: z.string(),
-          countries: z.array(z.string()).optional().describe("Varsayilan: [\"TR\"]"),
+          countries: z.array(z.string()).optional().describe('Varsayilan: ["TR"]'),
           creative_type: z.enum(["single", "carousel"]),
           images: z.array(imageInputSchema).min(1).describe("carousel icin gorsel sayisi = headline sayisi olmali."),
           headlines: z.array(z.string()).min(1),
@@ -198,16 +268,14 @@ export class BalikCepteMcp extends McpAgent<Env, State, Props> {
       async ({ campaign_id }) => {
         try {
           const status = await campaigns.getCampaignStatus(this.env, campaign_id);
-          const token = crypto.randomUUID();
-          const expiresAt = Date.now() + RESUME_TOKEN_TTL_MS;
-          this.setState({ pendingResume: { campaignId: campaign_id, token, expiresAt } });
+          const { token, expiresInSeconds } = this.armPending("campaign_resume", campaign_id);
           return jsonResult({
             campaign: status,
             warning:
               "Bu kampanyayi ACTIVE yapmak GERCEK HARCAMAYI baslatir. Kullanicidan acik onay almadan " +
               "campaign_resume_confirm'i cagirma.",
             confirm_token: token,
-            expires_in_seconds: RESUME_TOKEN_TTL_MS / 1000,
+            expires_in_seconds: expiresInSeconds,
           });
         } catch (err) {
           return errorResult(err);
@@ -224,25 +292,13 @@ export class BalikCepteMcp extends McpAgent<Env, State, Props> {
         inputSchema: { campaign_id: z.string(), confirm_token: z.string() },
       },
       async ({ campaign_id, confirm_token }) => {
-        const pending = this.state.pendingResume;
-        if (!pending || pending.campaignId !== campaign_id || pending.token !== confirm_token) {
-          return errorResult(
-            new Error(
-              "Gecersiz ya da eslesmeyen confirm_token. Once campaign_resume_preview'i bu campaign_id ile cagir.",
-            ),
-          );
-        }
-        if (Date.now() > pending.expiresAt) {
-          this.setState({ pendingResume: null });
-          return errorResult(new Error("confirm_token'in suresi doldu (5 dk). campaign_resume_preview'i tekrar cagir."));
-        }
-
+        const err = this.consumePending("campaign_resume", campaign_id, confirm_token);
+        if (err) return errorResult(new Error(err));
         try {
           await campaigns.resumeCampaign(this.env, campaign_id);
-          this.setState({ pendingResume: null });
           return jsonResult({ campaign_id, status: "ACTIVE" });
-        } catch (err) {
-          return errorResult(err);
+        } catch (e) {
+          return errorResult(e);
         }
       },
     );
@@ -251,8 +307,9 @@ export class BalikCepteMcp extends McpAgent<Env, State, Props> {
       "campaign_set_budget",
       {
         description:
-          "Kampanya (CBO) gunluk butcesini gunceller. NOT: kampanya ACTIVE ise gercek harcama oranini " +
-          "hemen degistirir. Ad-set seviyesinde butce kullanan kampanyalarda etkisiz kalir.",
+          "Kampanya (CBO) gunluk butcesini gunceller. NOT: bu proje olusturdugu kampanyalarda butceyi " +
+          "HER ZAMAN ad-set seviyesinde ayarlar (CBO kapali) - o kampanyalarda bu tool'un etkisi olmaz, " +
+          "onun yerine adset_set_budget kullan. Bu sadece CBO acik (kampanya butceli) kampanyalar icindir.",
         inputSchema: { campaign_id: z.string(), daily_budget_try: z.number().positive() },
       },
       async ({ campaign_id, daily_budget_try }) => {
@@ -264,6 +321,272 @@ export class BalikCepteMcp extends McpAgent<Env, State, Props> {
         }
       },
     );
+
+    this.server.registerTool(
+      "campaign_delete_preview",
+      {
+        description:
+          "Bir kampanyayi silmeden ONCE durumunu gosterir ve 5 dakika gecerli bir confirm_token uretir. " +
+          "GUVENLIK: kampanya PAUSED degilse reddedilir (once campaign_pause cagir). Silme KALICIDIR, " +
+          "geri alinamaz.",
+        inputSchema: { campaign_id: z.string() },
+      },
+      async ({ campaign_id }) => {
+        try {
+          const status = await campaigns.getCampaignStatus(this.env, campaign_id);
+          if (status.status !== "PAUSED") {
+            throw new Error(
+              `Kampanya '${status.name}' su an ${status.status} - silmeden once campaign_pause ile durdur.`,
+            );
+          }
+          const { token, expiresInSeconds } = this.armPending("campaign_delete", campaign_id);
+          return jsonResult({
+            campaign: status,
+            warning: "Bu kampanyayi silmek KALICIDIR ve geri alinamaz. Onaylamadan campaign_delete_confirm'i cagirma.",
+            confirm_token: token,
+            expires_in_seconds: expiresInSeconds,
+          });
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "campaign_delete_confirm",
+      {
+        description:
+          "campaign_delete_preview'den alinan confirm_token ile kampanyayi KALICI olarak siler. Geri alinamaz.",
+        inputSchema: { campaign_id: z.string(), confirm_token: z.string() },
+      },
+      async ({ campaign_id, confirm_token }) => {
+        const err = this.consumePending("campaign_delete", campaign_id, confirm_token);
+        if (err) return errorResult(new Error(err));
+        try {
+          await campaigns.deleteCampaign(this.env, campaign_id);
+          return jsonResult({ campaign_id, deleted: true });
+        } catch (e) {
+          return errorResult(e);
+        }
+      },
+    );
+
+    // ---- Ad Set -----------------------------------------------------
+
+    this.server.registerTool(
+      "adset_list",
+      {
+        description:
+          "Ad set'leri listeler - campaign_id verilirse o kampanyanin ad set'leri, verilmezse hesap geneli.",
+        inputSchema: { campaign_id: z.string().optional(), status: statusFilterSchema },
+      },
+      async ({ campaign_id, status }) => {
+        try {
+          return jsonResult(await adsets.listAdSets(this.env, { campaignId: campaign_id, status }));
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "adset_status",
+      {
+        description: "Bir ad set'in adini, durumunu, gunluk butcesini, optimization_goal'ini ve kampanya id'sini gosterir.",
+        inputSchema: { adset_id: z.string() },
+      },
+      async ({ adset_id }) => {
+        try {
+          return jsonResult(await adsets.getAdSetStatus(this.env, adset_id));
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "adset_pause",
+      {
+        description: "Tek bir ad set'i PAUSED yapar (tum kampanyayi degil). Onay gerektirmez.",
+        inputSchema: { adset_id: z.string() },
+      },
+      async ({ adset_id }) => {
+        try {
+          await adsets.pauseAdSet(this.env, adset_id);
+          return jsonResult({ adset_id, status: "PAUSED" });
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "adset_resume_preview",
+      {
+        description:
+          "Ad set'i ACTIVE yapmadan once durumunu gosterir ve 5 dakika gecerli bir confirm_token uretir.",
+        inputSchema: { adset_id: z.string() },
+      },
+      async ({ adset_id }) => {
+        try {
+          const status = await adsets.getAdSetStatus(this.env, adset_id);
+          const { token, expiresInSeconds } = this.armPending("adset_resume", adset_id);
+          return jsonResult({
+            adset: status,
+            warning: "Bu ad set'i ACTIVE yapmak GERCEK HARCAMAYI baslatir. Onaylamadan adset_resume_confirm'i cagirma.",
+            confirm_token: token,
+            expires_in_seconds: expiresInSeconds,
+          });
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "adset_resume_confirm",
+      {
+        description: "adset_resume_preview'den alinan confirm_token ile ad set'i GERCEKTEN ACTIVE yapar.",
+        inputSchema: { adset_id: z.string(), confirm_token: z.string() },
+      },
+      async ({ adset_id, confirm_token }) => {
+        const err = this.consumePending("adset_resume", adset_id, confirm_token);
+        if (err) return errorResult(new Error(err));
+        try {
+          await adsets.resumeAdSet(this.env, adset_id);
+          return jsonResult({ adset_id, status: "ACTIVE" });
+        } catch (e) {
+          return errorResult(e);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "adset_set_budget",
+      {
+        description:
+          "Ad set'in gunluk butcesini gunceller. Bu proje HER ZAMAN ad-set seviyesinde butce kullandigi " +
+          "icin gercek butce degisikligi icin dogru tool bu (campaign_set_budget degil).",
+        inputSchema: { adset_id: z.string(), daily_budget_try: z.number().positive() },
+      },
+      async ({ adset_id, daily_budget_try }) => {
+        try {
+          await adsets.setAdSetBudget(this.env, adset_id, daily_budget_try);
+          return jsonResult({ adset_id, daily_budget_try });
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    // ---- Ad -----------------------------------------------------------
+
+    this.server.registerTool(
+      "ad_list",
+      {
+        description:
+          "Reklamlari listeler - adset_id ya da campaign_id verilirse o kapsamda, hicbiri verilmezse hesap geneli.",
+        inputSchema: { adset_id: z.string().optional(), campaign_id: z.string().optional(), status: statusFilterSchema },
+      },
+      async ({ adset_id, campaign_id, status }) => {
+        try {
+          return jsonResult(await ads.listAds(this.env, { adsetId: adset_id, campaignId: campaign_id, status }));
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "ad_status",
+      {
+        description: "Bir reklamin adini, durumunu, ad set/kampanya id'sini gosterir.",
+        inputSchema: { ad_id: z.string() },
+      },
+      async ({ ad_id }) => {
+        try {
+          return jsonResult(await ads.getAdStatus(this.env, ad_id));
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "ad_pause",
+      {
+        description: "Tek bir reklami PAUSED yapar. Onay gerektirmez.",
+        inputSchema: { ad_id: z.string() },
+      },
+      async ({ ad_id }) => {
+        try {
+          await ads.pauseAd(this.env, ad_id);
+          return jsonResult({ ad_id, status: "PAUSED" });
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "ad_resume_preview",
+      {
+        description: "Reklami ACTIVE yapmadan once durumunu gosterir ve 5 dakika gecerli bir confirm_token uretir.",
+        inputSchema: { ad_id: z.string() },
+      },
+      async ({ ad_id }) => {
+        try {
+          const status = await ads.getAdStatus(this.env, ad_id);
+          const { token, expiresInSeconds } = this.armPending("ad_resume", ad_id);
+          return jsonResult({
+            ad: status,
+            warning: "Bu reklami ACTIVE yapmak GERCEK HARCAMAYI baslatir. Onaylamadan ad_resume_confirm'i cagirma.",
+            confirm_token: token,
+            expires_in_seconds: expiresInSeconds,
+          });
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "ad_resume_confirm",
+      {
+        description: "ad_resume_preview'den alinan confirm_token ile reklami GERCEKTEN ACTIVE yapar.",
+        inputSchema: { ad_id: z.string(), confirm_token: z.string() },
+      },
+      async ({ ad_id, confirm_token }) => {
+        const err = this.consumePending("ad_resume", ad_id, confirm_token);
+        if (err) return errorResult(new Error(err));
+        try {
+          await ads.resumeAd(this.env, ad_id);
+          return jsonResult({ ad_id, status: "ACTIVE" });
+        } catch (e) {
+          return errorResult(e);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "ad_preview",
+      {
+        description:
+          "Mevcut bir reklamin gercekte nasil gorunecegini (HTML) getirir - ACTIVE etmeden once gorsel " +
+          "QA icin kullan. ad_format ornekleri: MOBILE_FEED_STANDARD (varsayilan), DESKTOP_FEED_STANDARD, " +
+          "INSTAGRAM_STANDARD, INSTAGRAM_STORY.",
+        inputSchema: { ad_id: z.string(), ad_format: z.string().optional() },
+      },
+      async ({ ad_id, ad_format }) => {
+        try {
+          return jsonResult(await ads.previewAd(this.env, ad_id, ad_format));
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    // ---- Gorsel deposu (R2) --------------------------------------------
 
     this.server.registerTool(
       "creative_store_list",
@@ -340,18 +663,22 @@ export class BalikCepteMcp extends McpAgent<Env, State, Props> {
       },
     );
 
+    // ---- Rapor ----------------------------------------------------------
+
     this.server.registerTool(
       "report",
       {
         description:
-          "Kampanya performans raporu (impressions/clicks/spend/ctr/cpc/actions). since+until verilmezse " +
-          "date_preset (varsayilan last_30d) kullanilir. campaign_id verilmezse hesap genelinde raporlar.",
+          "Performans raporu (impressions/clicks/spend/ctr/cpc/actions). since+until verilmezse " +
+          "date_preset (varsayilan last_30d) kullanilir. campaign_id verilmezse hesap genelinde raporlar. " +
+          "level ile kirilim seviyesi secilir: campaign (varsayilan), adset, ad.",
         inputSchema: {
           since: z.string().optional().describe("YYYY-MM-DD"),
           until: z.string().optional().describe("YYYY-MM-DD"),
           date_preset: z.string().optional().describe("orn. last_7d, last_30d"),
           breakdown: z.string().optional().describe("orn. age, gender, publisher_platform"),
           campaign_id: z.string().optional(),
+          level: z.enum(["campaign", "adset", "ad"]).default("campaign"),
         },
       },
       async (args) => {
@@ -362,6 +689,7 @@ export class BalikCepteMcp extends McpAgent<Env, State, Props> {
             datePreset: args.date_preset,
             breakdown: args.breakdown,
             campaignId: args.campaign_id,
+            level: args.level,
           });
           return jsonResult(rows);
         } catch (err) {

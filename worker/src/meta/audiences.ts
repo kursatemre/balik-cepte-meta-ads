@@ -6,7 +6,7 @@
  * ulasana kadar "too small" olarak isaretler ve kampanyada kullanmaya izin
  * vermez.
  */
-import { graphRequest, type MetaEnv } from "./client";
+import { adAccountPath, graphRequest, graphRequestPaged, type MetaEnv } from "./client";
 
 const DELIVERY_READY_CODE = 200;
 
@@ -40,6 +40,23 @@ export async function getAudienceStatus(env: MetaEnv, audienceId: string): Promi
     deliveryStatus: delivery,
     ready: delivery?.code === DELIVERY_READY_CODE,
   };
+}
+
+export async function listAudiences(
+  env: MetaEnv,
+  opts: { limit?: number } = {},
+): Promise<Record<string, unknown>[]> {
+  const fields = [
+    "id",
+    "name",
+    "approximate_count_lower_bound",
+    "approximate_count_upper_bound",
+    "delivery_status",
+  ].join(",");
+  return await graphRequestPaged(env, adAccountPath(env, "customaudiences"), {
+    fields,
+    limit: opts.limit ?? 50,
+  });
 }
 
 /** Kitle hazir degilse hata firlatir - kampanya olusturmadan once cagirilir. */
