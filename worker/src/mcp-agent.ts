@@ -222,9 +222,17 @@ export class BalikCepteMcp extends McpAgent<Env, State, Props> {
                 "(orn. mevcut 'claude TOF' kampanyasi da audience_id kullanmiyor).",
             ),
           countries: z.array(z.string()).optional().describe('Varsayilan: ["TR"]'),
-          creative_type: z.enum(["single", "carousel"]),
-          images: z.array(imageInputSchema).min(1).describe("carousel icin gorsel sayisi = headline sayisi olmali."),
-          headlines: z.array(z.string()).min(1),
+          creative_type: z.enum(["single", "carousel", "video"]),
+          images: z
+            .array(imageInputSchema)
+            .min(1)
+            .optional()
+            .describe("single/carousel icin gerekli - carousel'de gorsel sayisi = headline sayisi olmali. video icin kullanilmaz."),
+          video: imageInputSchema.optional().describe("creative_type=video icin gerekli - tek bir video."),
+          thumbnail: imageInputSchema
+            .optional()
+            .describe("video icin opsiyonel kapak karesi - verilmezse Meta videodan otomatik secer."),
+          headlines: z.array(z.string()).min(1).describe("video icin sadece ilk eleman (baslik olarak) kullanilir."),
           descriptions: z.array(z.string()).optional(),
           message: z.string().optional(),
           link: z.string().url(),
@@ -258,6 +266,8 @@ export class BalikCepteMcp extends McpAgent<Env, State, Props> {
             link: args.link,
             creativeType: args.creative_type,
             images: args.images,
+            video: args.video,
+            thumbnail: args.thumbnail,
             headlines: args.headlines,
             descriptions: args.descriptions,
             message: args.message,
@@ -541,6 +551,60 @@ export class BalikCepteMcp extends McpAgent<Env, State, Props> {
       async ({ ad_id }) => {
         try {
           return jsonResult(await ads.getAdStatus(this.env, ad_id));
+        } catch (err) {
+          return errorResult(err);
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "ad_create",
+      {
+        description:
+          "Mevcut bir ad set'e YENI bir reklam ekler (campaign_create'in aksine yeni kampanya/ad set " +
+          "olusturmaz). Ayni butce/kitle altinda birden fazla kreatifi (orn. carousel'e karsi video) " +
+          "gercek bir yaristirma olarak test etmek icin kullan. GUVENLIK: HER ZAMAN PAUSED olusturulur - " +
+          "ad set ACTIVE olsa bile bu reklam kendiliginden yayina girmez, ad_resume_preview/confirm ile " +
+          "ayrica aktif edilmesi gerekir.",
+        inputSchema: {
+          adset_id: z.string(),
+          name: z.string(),
+          creative_type: z.enum(["single", "carousel", "video"]),
+          images: z
+            .array(imageInputSchema)
+            .min(1)
+            .optional()
+            .describe("single/carousel icin gerekli - carousel'de gorsel sayisi = headline sayisi olmali."),
+          video: imageInputSchema.optional().describe("creative_type=video icin gerekli - tek bir video."),
+          thumbnail: imageInputSchema
+            .optional()
+            .describe("video icin opsiyonel kapak karesi - verilmezse Meta videodan otomatik secer."),
+          headlines: z.array(z.string()).min(1).describe("video icin sadece ilk eleman (baslik olarak) kullanilir."),
+          descriptions: z.array(z.string()).optional(),
+          message: z.string().optional(),
+          link: z.string().url(),
+          page_id: z.string().optional().describe("Verilmezse META_PAGE_ID secret kullanilir."),
+        },
+      },
+      async (args) => {
+        try {
+          const pageId = args.page_id ?? this.env.META_PAGE_ID;
+          if (!pageId) throw new Error("Eksik: page_id / META_PAGE_ID");
+
+          const result = await ads.createAd(this.env, {
+            adsetId: args.adset_id,
+            name: args.name,
+            creativeType: args.creative_type,
+            images: args.images,
+            video: args.video,
+            thumbnail: args.thumbnail,
+            headlines: args.headlines,
+            descriptions: args.descriptions,
+            message: args.message,
+            link: args.link,
+            pageId,
+          });
+          return jsonResult(result);
         } catch (err) {
           return errorResult(err);
         }

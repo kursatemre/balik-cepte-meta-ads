@@ -126,6 +126,33 @@ export async function graphRequest(
   return json;
 }
 
+/**
+ * Multipart/form-data istek (binary dosya icerir) - graphRequest'in
+ * form-urlencoded gonderisinden farkli. Video base64 yuklemesi gibi ham
+ * byte gonderilmesi gereken durumlar icin (bkz. meta/creatives.ts).
+ */
+export async function graphRequestMultipart(
+  env: MetaEnv,
+  path: string,
+  fields: Record<string, string>,
+  file: { name: string; blob: Blob },
+): Promise<any> {
+  const form = new FormData();
+  for (const [k, v] of Object.entries(fields)) form.append(k, v);
+  form.append("access_token", env.META_ACCESS_TOKEN);
+  if (env.META_APP_SECRET) {
+    form.append("appsecret_proof", await appsecretProof(env.META_ACCESS_TOKEN, env.META_APP_SECRET));
+  }
+  form.append("source", file.blob, file.name);
+
+  const res = await fetch(`${GRAPH_BASE}${path}`, { method: "POST", body: form });
+  const json = (await res.json()) as any;
+  if (!res.ok || json?.error) {
+    throw new MetaApiError(json);
+  }
+  return json;
+}
+
 /** paging.next'i takip ederek tum sayfalari toplar (rapor gibi cok satirli sonuclar icin). */
 export async function graphRequestPaged(
   env: MetaEnv,

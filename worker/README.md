@@ -79,7 +79,7 @@ Yerel test için `.dev.vars.example`'ı `.dev.vars` olarak kopyala, doldur,
    MCP_ADMIN_PASSWORD` ile yenisini ayarla)
 4. Onayla — bundan sonra token kalıcı, her seferinde tekrar giriş gerekmez.
 
-## Araçlar (tools) — 28 tool
+## Araçlar (tools) — 29 tool
 
 **Kitle**: `audience_list`, `audience_status`
 
@@ -91,9 +91,22 @@ bkz. asagida), `campaign_delete_preview`/`campaign_delete_confirm`
 **Ad Set**: `adset_list`, `adset_status`, `adset_pause`,
 `adset_resume_preview`/`adset_resume_confirm`, `adset_set_budget`
 
-**Ad**: `ad_list`, `ad_status`, `ad_pause`,
+**Ad**: `ad_list`, `ad_status`, `ad_create` (mevcut bir ad set'e YENI reklam
+ekler - campaign_create'in aksine kampanya/ad set olusturmaz, ayni butce/
+kitle altinda birden fazla kreatifi - orn. carousel'e karsi video - gercek
+bir yaristirma olarak test etmek icin), `ad_pause`,
 `ad_resume_preview`/`ad_resume_confirm`, `ad_preview` (gorsel QA - reklamin
 gercekte nasil gorunecegini HTML olarak getirir)
+
+**Kreatif tipleri** (`campaign_create` ve `ad_create`'de `creative_type`):
+`single` (1 gorsel), `carousel` (2-10 gorsel), `video` (1 video). Video icin
+bir kapak karesi (thumbnail) ZORUNLU - vermezsen Meta'nin videodan otomatik
+urettigi kareye (video "ready" durumuna gelince cekilen `picture` alani)
+dusulur, bu yuzden `thumbnail` cogunlukla opsiyonel birakilabilir.
+`images`/`video`/`thumbnail` ucu de `{url}` / `{base64}` / `{key}` (depodan)
+kabul eder - video icin `url`/`key` cok daha verimli (Meta'ya `file_url`
+olarak veriliyor, Meta kendisi fetch ediyor - Worker'in istek/yanit boyut
+sinirina takilmaz), `base64` gercek multipart binary yukleme gerektirir.
 
 **Rapor**: `report` (level: campaign/adset/ad kirilimi destekler)
 
@@ -118,9 +131,14 @@ görseli bir kere depoya kaydet, sonra `campaign_create`'de `images` alanında
 yüklemeye gerek kalmaz. Python CLI'daki yerel `creatives/` klasörünün uzaktan
 erişilebilir karşılığı.
 
+Depodaki her dosya `https://.../assets/<key>` üzerinden **auth'suz, herkese
+açık** servis ediliyor (`src/assets-handler.ts`) — Meta'nın video yükleme ucu
+büyük dosyalar için bir `file_url` beklediğinden gerekli. Bunlar zaten
+pazarlama kreatifi (gizli veri değil), kabul edilebilir bir risk.
+
 ## Apple Search Ads (ASA)
 
-Meta'nın yanında aynı sunucuda **Apple Search Ads** entegrasyonu da var — 22 tool (`asa_` önekiyle), toplam **50 tool**.
+Meta'nın yanında aynı sunucuda **Apple Search Ads** entegrasyonu da var — 22 tool (`asa_` önekiyle), toplam **51 tool**.
 
 **Auth tamamen farklı**: Meta'nın uzun ömürlü access token'ının aksine, ASA
 kendi imzaladığın bir JWT ("client secret", ES256, `crypto.subtle` ile) ile
@@ -157,7 +175,7 @@ oluşturma, rapor çekme, delete_preview/confirm — hepsi uçtan uca doğruland
 
 ## Google Ads
 
-Aynı sunucuda üçüncü platform: **Google Ads** — 22 tool (`gads_` önekiyle), toplam **72 tool**.
+Aynı sunucuda üçüncü platform: **Google Ads** — 22 tool (`gads_` önekiyle), toplam **73 tool**.
 
 **Durum (2026-09-03)**: Auth zinciri kuruldu ve doğrulandı. Balık Cepte'nin
 kendi Google Ads hesabı oluşturuldu (`149-426-8690` / `1494268690`,

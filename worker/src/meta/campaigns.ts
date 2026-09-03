@@ -17,12 +17,7 @@
  */
 import { adAccountPath, graphRequest, graphRequestPaged, type MetaEnv } from "./client";
 import { ensureAudienceReady } from "./audiences";
-import {
-  buildCarouselCreative,
-  buildSingleImageCreative,
-  uploadImage,
-  type ImageInput,
-} from "./creatives";
+import { buildCreativeForType, type ImageInput } from "./creatives";
 
 export const DEFAULT_OBJECTIVE = "OUTCOME_APP_PROMOTION";
 export const DEFAULT_OPTIMIZATION_GOAL = "APP_INSTALLS";
@@ -102,8 +97,10 @@ export interface CreateCampaignInput {
   appStoreUrl: string;
   pageId: string;
   link: string;
-  creativeType: "single" | "carousel";
-  images: ImageInput[];
+  creativeType: "single" | "carousel" | "video";
+  images?: ImageInput[];
+  video?: ImageInput;
+  thumbnail?: ImageInput;
   headlines: string[];
   descriptions?: string[];
   message?: string;
@@ -119,14 +116,8 @@ export async function createPausedCampaign(
   env: MetaEnv & { CREATIVES?: R2Bucket },
   input: CreateCampaignInput,
 ) {
-  if (input.creativeType !== "single" && input.creativeType !== "carousel") {
-    throw new Error("creative_type 'single' ya da 'carousel' olmali.");
-  }
-  if (input.creativeType === "carousel" && input.headlines.length !== input.images.length) {
-    throw new Error("Carousel'de her gorsel icin bir headline gerekli (sayilar esit degil).");
-  }
-  if (input.creativeType === "single" && input.images.length !== 1) {
-    throw new Error("Tekil (single) kreatif icin tam olarak 1 gorsel gerekli.");
+  if (!["single", "carousel", "video"].includes(input.creativeType)) {
+    throw new Error("creative_type 'single', 'carousel' ya da 'video' olmali.");
   }
 
   // Kitle hazir degilse burada durur - hicbir yazma cagrisi yapilmadan once.
@@ -188,36 +179,17 @@ export async function createPausedCampaign(
   });
   const adsetId = adset.id as string;
 
-  // Sirali yukleniyor (Python'daki list comprehension gibi) - Meta rate limit'ine
-  // ani yuklenmeyi onlemek icin paralel degil.
-  const imageHashes: string[] = [];
-  for (const image of input.images) {
-    imageHashes.push(await uploadImage(env, image));
-  }
-
-  let creativePayload: Record<string, unknown>;
-  if (input.creativeType === "single") {
-    creativePayload = buildSingleImageCreative({
-      pageId: input.pageId,
-      link: input.link,
-      imageHash: imageHashes[0],
-      message: input.message ?? "",
-      headline: input.headlines[0],
-    });
-  } else {
-    const descs = input.descriptions ?? input.images.map(() => "");
-    const cards = imageHashes.map((hash, i) => ({
-      image_hash: hash,
-      name: input.headlines[i],
-      description: descs[i] ?? "",
-    }));
-    creativePayload = buildCarouselCreative({
-      pageId: input.pageId,
-      link: input.link,
-      message: input.message ?? "",
-      cards,
-    });
-  }
+  const creativePayload = await buildCreativeForType(env, {
+    creativeType: input.creativeType,
+    images: input.images,
+    video: input.video,
+    thumbnail: input.thumbnail,
+    headlines: input.headlines,
+    descriptions: input.descriptions,
+    message: input.message,
+    link: input.link,
+    pageId: input.pageId,
+  });
 
   const creative = await graphRequest(env, adAccountPath(env, "adcreatives"), {
     method: "POST",
